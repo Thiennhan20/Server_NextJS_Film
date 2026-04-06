@@ -50,6 +50,7 @@ const commentSchema = new mongoose.Schema({
 commentSchema.index({ movieId: 1, type: 1, createdAt: -1 });
 commentSchema.index({ parentId: 1 });
 commentSchema.index({ userId: 1 });
+commentSchema.index({ likedBy: 1 });
 
 // Virtual for checking if user liked the comment
 commentSchema.virtual('isLiked').get(function() {

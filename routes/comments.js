@@ -2,16 +2,20 @@ const express = require('express');
 const router = express.Router();
 const { body } = require('express-validator');
 const auth = require('../middleware/auth');
+const optionalAuth = require('../middleware/optionalAuth');
 const commentController = require('../controllers/commentController');
 
 // GET /api/comments/top - Lấy top comments (most liked or most replied) for homepage
-router.get('/top', commentController.getTopComments);
+router.get('/top', optionalAuth, commentController.getTopComments);
 
 // GET /api/comments/recent - Lấy recent comments (newest across all movies) for homepage
-router.get('/recent', commentController.getRecentComments);
+router.get('/recent', optionalAuth, commentController.getRecentComments);
+
+// GET /api/comments/user/me - Lấy comments của mình
+router.get('/user/me', auth, commentController.getUserComments);
 
 // GET /api/comments/:movieId/:type - Lấy comments với phân trang, sort DB-side và batched replies
-router.get('/:movieId/:type', commentController.getCommentsByMovie);
+router.get('/:movieId/:type', optionalAuth, commentController.getCommentsByMovie);
 
 // POST /api/comments - Tạo comment mới
 router.post('/', [
@@ -42,6 +46,6 @@ router.put(
 router.delete('/:id', auth, commentController.deleteComment);
 
 // GET /api/comments/:id/replies - Lấy replies của một comment
-router.get('/:id/replies', commentController.getReplies);
+router.get('/:id/replies', optionalAuth, commentController.getReplies);
 
 module.exports = router;

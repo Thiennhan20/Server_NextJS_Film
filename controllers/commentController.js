@@ -148,6 +148,59 @@ const getRecentComments = async (req, res) => {
     }
 };
 
+// GET /api/comments/user/me - Lấy comments của user hiện tại
+const getUserComments = async (req, res) => {
+    try {
+        const userId = req.user;
+        const page = Math.max(parseInt(req.query.page || '1', 10), 1);
+        const limit = Math.min(Math.max(parseInt(req.query.limit || '20', 10), 1), 50);
+        const skip = (page - 1) * limit;
+
+        const filter = req.query.filter || 'comments';
+        let query = { isDeleted: false };
+        if (filter === 'liked') {
+            query.likedBy = userId;
+        } else if (filter === 'replies') {
+            query.userId = userId;
+            query.parentId = { $ne: null };
+        } else {
+            query.userId = userId;
+            query.parentId = null;
+        }
+
+        const [total, comments] = await Promise.all([
+            Comment.countDocuments(query),
+            Comment.find(query)
+                .populate('userId', 'name email avatar')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .lean()
+        ]);
+
+        const data = comments.map(c => {
+            const liked = c.likedBy?.some(id => id.equals?.(userId));
+            const { likedBy, ...rest } = c;
+            return {
+                ...rest,
+                isLiked: liked
+            };
+        });
+
+        res.json({
+            success: true,
+            data,
+            total,
+            page,
+            limit,
+            totalPages: Math.ceil(total / limit)
+        });
+    } catch (error) {
+        console.error('Get user comments error:', error);
+        res.status(500).json({ message: 'Server error' });
+    }
+};
+
 // GET /api/comments/:movieId/:type - Lấy comments với phân trang, sort DB-side và batched replies
 const getCommentsByMovie = async (req, res) => {
     try {
@@ -440,6 +493,7 @@ module.exports = {
     validateRequest,
     getTopComments,
     getRecentComments,
+    getUserComments,
     getCommentsByMovie,
     createComment,
     toggleLike,
