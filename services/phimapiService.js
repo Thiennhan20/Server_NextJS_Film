@@ -18,11 +18,13 @@ async function searchPhimapi(keyword, year) {
     if (year) url += `&year=${encodeURIComponent(year)}`;
 
     const response = await axios.get(url, { timeout: TIMEOUT });
+    const itemCount = response.data?.data?.items?.length || 0;
     return response.data;
 }
 
 async function getDetail(slug) {
     const response = await axios.get(`${PHIMAPI_BASE}/phim/${encodeURIComponent(slug)}`, { timeout: TIMEOUT });
+    const episodesCount = response.data?.episodes?.length || 0;
     return response.data;
 }
 

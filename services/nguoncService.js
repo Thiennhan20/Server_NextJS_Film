@@ -18,14 +18,30 @@ function extractSeasonFromTitle(title, slug) {
     if (titleMatch) return parseInt(titleMatch[1]);
     const slugMatch = slug.match(/-(?:phan|season|mua)-(\d+)(?:-|$)/i);
     if (slugMatch) return parseInt(slugMatch[1]);
+    // Check trailing number in slug: "toan-chuc-phap-su-6" → 6
+    const slugTrailing = slug.match(/-(\d+)$/);
+    if (slugTrailing) {
+        const num = parseInt(slugTrailing[1]);
+        if (num < 100) return num;
+    }
+    // Check trailing number in name: "Toàn Chức Pháp Sư 6" → 6
+    const nameTrailing = title.trim().match(/\s(\d+)$/);
+    if (nameTrailing) {
+        const num = parseInt(nameTrailing[1]);
+        if (num < 100) return num;
+    }
     return null;
 }
 
 // Helper: Check if title contains any season indicator without a number
 function titleContainsSeason(title, slug) {
-    return /ph[aầ]n/i.test(title) || /phan/i.test(slug) ||
+    if (/ph[aầ]n/i.test(title) || /phan/i.test(slug) ||
         /season/i.test(title) || /season/i.test(slug) ||
-        /m[uù]a/i.test(title) || /mua/i.test(slug);
+        /m[uù]a/i.test(title) || /mua/i.test(slug)) return true;
+    // Also detect trailing numbers as season indicators
+    if (/\s\d+$/.test(title.trim())) return true;
+    if (/-(\d+)$/.test(slug)) return true;
+    return false;
 }
 
 // Helper: Fetch film by slug (with retry)
@@ -36,7 +52,6 @@ async function fetchFilmBySlug(slug) {
             return res.data.movie;
         }
     } catch (e) {
-        console.error(`Error fetching film details for slug ${slug}:`, e.message);
     }
     return null;
 }
@@ -51,7 +66,9 @@ async function searchNguonc(keyword, targetOriginalName) {
         while (page <= totalPages && page <= 5) {
             const res = await axios.get(`https://phim.nguonc.com/api/films/search?keyword=${encodeURIComponent(keyword.trim())}&page=${page}`);
             const data = res.data;
-            if (data?.status !== 'success' || !data.items || data.items.length === 0) break;
+            if (data?.status !== 'success' || !data.items || data.items.length === 0) {
+                break;
+            }
 
             allItems.push(...data.items);
             totalPages = data.paginate?.total_page || 1;
@@ -66,7 +83,6 @@ async function searchNguonc(keyword, targetOriginalName) {
             page++;
         }
     } catch (e) {
-        console.error(`Error searching Nguonc for keyword ${keyword}:`, e.message);
     }
     return allItems;
 }
@@ -124,7 +140,9 @@ async function getBestMatchTVShow(keyword, normalizedTitle, cleanTitle, season, 
         items = await searchNguonc(yearKeyword);
     }
 
-    if (items.length === 0) return null;
+    if (items.length === 0) {
+        return null;
+    }
 
     // Filter by name match
     const nameMatches = items.filter((item) => {
@@ -183,28 +201,50 @@ async function getBestMatchTVShow(keyword, normalizedTitle, cleanTitle, season, 
         }
     }
 
-    // Verify with detail API
-    if (tmdbYear) {
-        const toVerify = [bestMatch, ...candidates.filter(m => m.slug !== bestMatch.slug).slice(0, 3)];
+    // Verify with detail API — check ALL candidates, not just 4
+    if (tmdbYear || season > 1) {
+        const toVerify = [bestMatch, ...candidates.filter(m => m.slug !== bestMatch.slug)];
         for (const candidate of toVerify) {
             const detail = await fetchFilmBySlug(candidate.slug);
             if (detail?.category) {
                 const yearStr = Object.values(detail.category).find(cat => cat.group?.name === 'Năm')?.list?.[0]?.name;
-                const yearMatch = yearStr ? parseInt(yearStr) === tmdbYear : false;
+                const detailYear = yearStr ? parseInt(yearStr) : 0;
+                // For season > 1, relax year matching since TMDB year is first-air-date
+                // which differs from individual season release years
+                const yearMatch = detailYear === tmdbYear;
+                const yearClose = Math.abs(detailYear - tmdbYear) <= 10; // Same franchise within 10 years
                 const detailSeason = extractSeasonFromTitle(detail.name || '', detail.slug || '');
                 const seasonMatch = season === 1
                     ? (detailSeason === null || detailSeason === 1)
                     : detailSeason === season;
 
-                if ((yearMatch || !tmdbYear) && seasonMatch && detail.episodes) {
-                    return detail; // High confidence match
+                // For season > 1: prioritize season match, relax year requirement
+                if (seasonMatch && detail.episodes) {
+                    if (yearMatch || yearClose || season > 1) {
+                        return detail;
+                    }
                 }
             }
         }
     }
 
     // Fallback: If no single clear match via Year, just pick the best scoring item and fetch details
+    // BUT only if bestScore is positive (not a wrong-season match)
+    if (bestScore < 0) {
+        return null;
+    }
     const fallbackDetail = await fetchFilmBySlug(bestMatch.slug);
+    
+    // Final season verification on the fetched detail
+    if (fallbackDetail) {
+        const fallbackSeason = extractSeasonFromTitle(fallbackDetail.name || '', fallbackDetail.slug || '');
+        const seasonOk = season === 1
+            ? (fallbackSeason === null || fallbackSeason === 1)
+            : fallbackSeason === season;
+        if (!seasonOk) {
+            return null;
+        }
+    }
     return fallbackDetail;
 }
 

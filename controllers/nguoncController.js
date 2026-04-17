@@ -13,17 +13,14 @@ const searchTVShow = async (req, res) => {
         const tmdbYear = parseInt(year) || 0;
         const selectedSeason = parseInt(season) || 1;
         const selectedEpisode = parseInt(episode) || 1;
-
         const detail = await nguoncService.getBestMatchTVShow(keyword, normalizedTitle, cleanTitle, selectedSeason, tmdbYear);
 
         if (detail && detail.episodes) {
             const links = nguoncService.extractLinksForEpisode(detail.episodes, selectedEpisode);
             return res.json({ status: 'success', data: { detail, links } });
         }
-
         res.json({ status: 'not_found' });
     } catch (e) {
-        console.error('Error in /search-tv route:', e);
         res.status(500).json({ error: 'Server Error' });
     }
 };
@@ -47,7 +44,6 @@ const searchMovie = async (req, res) => {
 
         res.json({ status: 'not_found' });
     } catch (e) {
-        console.error('Error in /search-movie route:', e);
         res.status(500).json({ error: 'Server Error' });
     }
 };

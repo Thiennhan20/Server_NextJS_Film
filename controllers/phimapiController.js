@@ -10,7 +10,6 @@ const tmdbMovieLookup = async (req, res) => {
         if (e.response) {
             res.status(e.response.status).json(e.response.data);
         } else {
-            console.error('Phimapi TMDB proxy error:', e.message);
             res.status(500).json({ error: 'Proxy error' });
         }
     }
@@ -26,7 +25,6 @@ const tmdbTVLookup = async (req, res) => {
         if (e.response) {
             res.status(e.response.status).json(e.response.data);
         } else {
-            console.error('Phimapi TMDB TV proxy error:', e.message);
             res.status(500).json({ error: 'Proxy error' });
         }
     }
@@ -46,7 +44,6 @@ const search = async (req, res) => {
         if (e.response) {
             res.status(e.response.status).json(e.response.data);
         } else {
-            console.error('Phimapi search proxy error:', e.message);
             res.status(500).json({ error: 'Proxy error' });
         }
     }
@@ -62,7 +59,6 @@ const getDetail = async (req, res) => {
         if (e.response) {
             res.status(e.response.status).json(e.response.data);
         } else {
-            console.error('Phimapi detail proxy error:', e.message);
             res.status(500).json({ error: 'Proxy error' });
         }
     }
