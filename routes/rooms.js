@@ -12,6 +12,33 @@ const router = express.Router();
 const auth = require('../middleware/auth');
 const roomService = require('../services/roomService');
 
+// ─── GET /api/rooms/public — Public listing (no auth required) ──
+router.get('/public', async (req, res) => {
+  try {
+    const rooms = await roomService.listActiveRooms();
+    // Return limited info for public view (no stream_url)
+    const publicRooms = rooms.map(r => ({
+      room_id: r.room_id,
+      title: r.title,
+      host_name: r.host_name,
+      host_avatar: r.host_avatar,
+      host_id: r.host_id,
+      status: r.status,
+      member_count: r.member_count,
+      max_users: r.max_users,
+      created_at: r.created_at,
+      ttl_seconds: r.ttl_seconds,
+    }));
+    res.json({
+      rooms: publicRooms,
+      total_rooms: publicRooms.length,
+    });
+  } catch (error) {
+    console.error('Public list rooms error:', error);
+    res.status(500).json({ error: 'Failed to list rooms.' });
+  }
+});
+
 // ─── GET /api/rooms — Danh sách phòng đang hoạt động ────────
 
 router.get('/', auth, async (req, res) => {
