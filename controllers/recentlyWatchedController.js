@@ -29,17 +29,35 @@ const getList = async (req, res) => {
             return res.json({ item });
         }
 
-        // Try cache first
-        const cached = getCache(req.user);
-        if (cached) return res.json({ items: cached });
+        const page = Math.max(parseInt(req.query.page || '1', 10), 1);
+        const limit = Math.max(parseInt(req.query.limit || '20', 10), 1);
+        const skip = (page - 1) * limit;
 
-        const limit = Math.min(parseInt(req.query.limit || '50', 10), 100);
+        // Only use cache for page 1 (hot path from home page)
+        if (page === 1) {
+            const cached = getCache(req.user);
+            if (cached) {
+                const hasMore = cached.length === limit;
+                return res.json({ items: cached, hasMore });
+            }
+        }
+
+        // Fetch limit + 1 to determine hasMore without extra count query
         const items = await projectClean(WatchProgress.find({ userId: req.user }))
             .sort({ lastWatched: -1 })
-            .limit(limit)
+            .skip(skip)
+            .limit(limit + 1)
             .lean();
-        setCache(req.user, items);
-        res.json({ items });
+
+        const hasMore = items.length > limit;
+        const result = hasMore ? items.slice(0, limit) : items;
+
+        // Only cache page 1
+        if (page === 1) {
+            setCache(req.user, result);
+        }
+
+        res.json({ items: result, hasMore });
     } catch (e) {
         console.error('recently-watched GET error:', e);
         res.status(500).json({ code: 'GET_FAILED', message: 'Failed to fetch recently watched' });
