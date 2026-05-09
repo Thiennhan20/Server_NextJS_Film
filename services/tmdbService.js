@@ -22,7 +22,8 @@ const ALLOWED_ENDPOINTS = [
 ];
 
 function isEndpointAllowed(endpoint) {
-    return ALLOWED_ENDPOINTS.some(pattern => pattern.test(endpoint));
+    const pathOnly = endpoint.split('?')[0];
+    return ALLOWED_ENDPOINTS.some(pattern => pattern.test(pathOnly));
 }
 
 // Get TTL (seconds) based on endpoint type
