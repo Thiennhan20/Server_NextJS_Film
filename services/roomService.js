@@ -56,7 +56,7 @@ function isValidStreamUrl(url) {
  * @param {string} params.title - Movie/show title
  * @returns {{ success: boolean, roomId?: string, error?: string }}
  */
-async function createRoom({ hostId, hostName, hostAvatar, streamUrl, title }) {
+async function createRoom({ hostId, hostName, hostAvatar, streamUrl, title, movieId, audio }) {
   // Check capacity limit
   const activeCount = await countActiveRooms();
   if (activeCount >= MAX_CONCURRENT_ROOMS) {
@@ -67,6 +67,19 @@ async function createRoom({ hostId, hostName, hostAvatar, streamUrl, title }) {
       activeCount,
       maxRooms: MAX_CONCURRENT_ROOMS,
     };
+  }
+
+  // Check duplicate: same user + same movieId + same audio (even if audio is empty)
+  if (movieId) {
+    const duplicate = await checkDuplicateRoom(hostId, movieId, audio || '');
+    if (duplicate) {
+      return {
+        success: false,
+        error: `You already have an active room for this content with the same audio track.`,
+        code: 'DUPLICATE_ROOM',
+        existingRoomId: duplicate.room_id,
+      };
+    }
   }
 
   // Generate unique Room ID with collision check
@@ -91,6 +104,8 @@ async function createRoom({ hostId, hostName, hostAvatar, streamUrl, title }) {
     host_avatar: hostAvatar || '',
     stream_url: streamUrl || '',
     title: title || '',
+    movie_id: movieId || '',
+    audio: audio || '',
     status: 'WAITING',
     created_at: String(now),
     max_users: String(MAX_USERS),
@@ -348,6 +363,46 @@ async function listActiveRooms() {
   }
 }
 
+/**
+ * Check if a user already has a room with the same movie_id + audio
+ * @param {string|object} hostId
+ * @param {string|number} movieId
+ * @param {string} audio - 'vietsub' | 'dubbed' | ''
+ * @returns {Object|null} existing room or null
+ */
+async function checkDuplicateRoom(hostId, movieId, audio) {
+  try {
+    const allKeys = await redis.keys('room:ROOM-*');
+    const roomKeys = allKeys.filter(k => !k.includes(':users') && !k.includes(':grace'));
+
+    const hostIdStr = String(hostId);
+    const movieIdStr = String(movieId);
+    const audioStr = String(audio || '');
+
+    for (const key of roomKeys) {
+      const data = await redis.hgetall(key);
+      if (!data || !data.host_id) continue;
+
+      if (
+        String(data.host_id) === hostIdStr &&
+        String(data.movie_id) === movieIdStr &&
+        String(data.audio || '') === audioStr
+      ) {
+        const roomId = key.replace('room:', '');
+        return {
+          room_id: roomId,
+          title: data.title || '',
+          audio: data.audio || '',
+        };
+      }
+    }
+    return null;
+  } catch (error) {
+    console.error('checkDuplicateRoom error:', error);
+    return null;
+  }
+}
+
 module.exports = {
   createRoom,
   getRoom,
@@ -365,6 +420,7 @@ module.exports = {
   updateStatus,
   listActiveRooms,
   countActiveRooms,
+  checkDuplicateRoom,
   isValidStreamUrl,
   ROOM_TTL,
   MAX_USERS,

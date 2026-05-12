@@ -55,11 +55,38 @@ router.get('/', auth, async (req, res) => {
   }
 });
 
+// ─── GET /api/rooms/check-duplicate — Check if user already has room for same movie+audio ──
+router.get('/check-duplicate', auth, async (req, res) => {
+  try {
+    const userId = req.user;
+    const { movieId, audio } = req.query;
+
+    if (!movieId) {
+      return res.status(400).json({ error: 'movieId is required.' });
+    }
+
+    const duplicate = await roomService.checkDuplicateRoom(userId, String(movieId), audio ? String(audio) : '');
+    if (duplicate) {
+      return res.json({
+        duplicate: true,
+        existing_room_id: duplicate.room_id,
+        title: duplicate.title,
+        audio: duplicate.audio,
+      });
+    }
+
+    res.json({ duplicate: false });
+  } catch (error) {
+    console.error('Check duplicate error:', error);
+    res.status(500).json({ error: 'Failed to check for duplicates.' });
+  }
+});
+
 // ─── POST /api/rooms — Tạo phòng mới ───────────────────────
 
 router.post('/', auth, async (req, res) => {
   try {
-    const { title, stream_url } = req.body;
+    const { title, stream_url, movie_id, audio } = req.body;
     const userId = req.user; // From auth middleware
 
     // Validate stream URL if provided
@@ -81,15 +108,20 @@ router.post('/', auth, async (req, res) => {
       hostAvatar,
       streamUrl: stream_url || '',
       title: title || '',
+      movieId: movie_id || '',
+      audio: audio || '',
     });
 
     if (!result.success) {
-      const status = result.code === 'CAPACITY_FULL' ? 503 : 500;
+      const status = result.code === 'CAPACITY_FULL' ? 503
+        : result.code === 'DUPLICATE_ROOM' ? 409
+        : 500;
       return res.status(status).json({
         error: result.error,
         code: result.code,
         active_count: result.activeCount,
         max_rooms: result.maxRooms,
+        existing_room_id: result.existingRoomId,
       });
     }
 
