@@ -17,6 +17,7 @@ const server3Routes = require('./routes/nguonc');
 const server1Routes = require('./routes/phimapi');
 const roomRoutes = require('./routes/rooms');
 const searchHistoryRoutes = require('./routes/searchHistory');
+const notificationRoutes = require('./routes/notifications');
 
 const app = express();
 // Security middleware
@@ -88,6 +89,7 @@ app.use('/api/server3', server3Routes);
 app.use('/api/server1', server1Routes);
 app.use('/api/rooms', roomRoutes);
 app.use('/api/search-history', searchHistoryRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 // Tạo HTTP server
 const server = http.createServer(app);

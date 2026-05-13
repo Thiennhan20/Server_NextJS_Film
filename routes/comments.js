@@ -14,6 +14,9 @@ router.get('/recent', optionalAuth, commentController.getRecentComments);
 // GET /api/comments/user/me - Lấy comments của mình
 router.get('/user/me', auth, commentController.getUserComments);
 
+// GET /api/comments/thread/:id - Get parent comment + replies for notification deep links
+router.get('/thread/:id', optionalAuth, commentController.getCommentThread);
+
 // GET /api/comments/:movieId/:type - Lấy comments với phân trang, sort DB-side và batched replies
 router.get('/:movieId/:type', optionalAuth, commentController.getCommentsByMovie);
 

@@ -8,6 +8,7 @@
 const { Server } = require('socket.io');
 const jwt = require('jsonwebtoken');
 const roomService = require('./services/roomService');
+const initializeNotificationSocket = require('./notificationSocket');
 
 const GRACE_PERIOD_MS = 30000;   // 30 seconds
 const HEARTBEAT_TIMEOUT_MS = 45000; // 45 seconds (3 missed heartbeats)
@@ -29,6 +30,8 @@ function initializeWebSocket(server) {
       credentials: true
     }
   });
+
+  initializeNotificationSocket(io);
 
   // ════════════════════════════════════════════════════════════
   //  DEFAULT NAMESPACE — Global Chat (legacy, giữ nguyên)

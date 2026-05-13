@@ -1,6 +1,7 @@
 const { validationResult } = require('express-validator');
 const Comment = require('../models/Comment');
 const User = require('../models/User');
+const notificationService = require('../services/notificationService');
 
 // Middleware to validate request
 const validateRequest = (req, res, next) => {
@@ -9,6 +10,52 @@ const validateRequest = (req, res, next) => {
         return res.status(400).json({ errors: errors.array() });
     }
     next();
+};
+
+const createNotificationSafely = async (payload) => {
+    try {
+        await notificationService.createNotification(payload);
+    } catch (error) {
+        console.warn('Create notification failed:', error.message);
+    }
+};
+
+const buildCommentUserLookupStages = () => ([
+    {
+        $lookup: {
+            from: 'users',
+            localField: 'userId',
+            foreignField: '_id',
+            as: 'userDoc'
+        }
+    },
+    { $unwind: '$userDoc' }
+]);
+
+const buildPopulateUserShapeStages = () => ([
+    {
+        $addFields: {
+            userId: {
+                _id: '$userDoc._id',
+                name: '$userDoc.name',
+                email: '$userDoc.email',
+                avatar: '$userDoc.avatar'
+            }
+        }
+    },
+    { $project: { userDoc: 0 } }
+]);
+
+const isLikedByUser = (comment, userId) => (
+    userId ? comment.likedBy?.some(id => id.equals?.(userId) || String(id) === String(userId)) : false
+);
+
+const serializeComment = (comment, userId) => {
+    const { likedBy, ...rest } = comment;
+    return {
+        ...rest,
+        isLiked: isLikedByUser(comment, userId)
+    };
 };
 
 // GET /api/comments/top - Lấy top comments (most liked or most replied) for homepage
@@ -236,16 +283,27 @@ const getCommentsByMovie = async (req, res) => {
                 break;
         }
 
-        // Total count of top-level comments
-        const [total, topLevel] = await Promise.all([
-            Comment.countDocuments({ movieId: Number(movieId), type, parentId: null, isDeleted: false }),
-            Comment.find({ movieId: Number(movieId), type, parentId: null, isDeleted: false })
-                .populate('userId', 'name email avatar')
-                .sort(sortQuery)
-                .skip(skip)
-                .limit(limit)
-                .lean()
+        const topLevelMatch = { movieId: Number(movieId), type, parentId: null, isDeleted: false };
+        const userLookupStages = buildCommentUserLookupStages();
+
+        // Total count of top-level comments whose author account still exists
+        const [totalResult, topLevel] = await Promise.all([
+            Comment.aggregate([
+                { $match: topLevelMatch },
+                ...userLookupStages,
+                { $count: 'total' }
+            ]),
+            Comment.aggregate([
+                { $match: topLevelMatch },
+                ...userLookupStages,
+                ...buildPopulateUserShapeStages(),
+                { $sort: sortQuery },
+                { $skip: skip },
+                { $limit: limit }
+            ])
         ]);
+
+        const total = totalResult[0]?.total || 0;
 
         const topIds = topLevel.map(c => c._id);
 
@@ -259,7 +317,7 @@ const getCommentsByMovie = async (req, res) => {
 
         // Group replies by parentId
         const repliesByParent = new Map();
-        for (const r of replies) {
+        for (const r of replies.filter(reply => !!reply.userId)) {
             // compute isLiked and strip likedBy
             const liked = userId ? r.likedBy?.some(id => id.equals?.(userId)) : false;
             delete r.likedBy;
@@ -293,6 +351,65 @@ const getCommentsByMovie = async (req, res) => {
     }
 };
 
+// GET /api/comments/thread/:id - Lấy trực tiếp comment cha và replies cho deep link notification
+const getCommentThread = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const userId = req.user;
+
+        const targetComment = await Comment.findOne({
+            _id: id,
+            isDeleted: false
+        })
+            .populate('userId', 'name email avatar')
+            .lean();
+
+        if (!targetComment || !targetComment.userId) {
+            return res.status(404).json({ message: 'Comment not found' });
+        }
+
+        const parentId = targetComment.parentId || targetComment._id;
+        const parentComment = targetComment.parentId
+            ? await Comment.findOne({
+                _id: parentId,
+                parentId: null,
+                isDeleted: false
+            })
+                .populate('userId', 'name email avatar')
+                .lean()
+            : targetComment;
+
+        if (!parentComment || !parentComment.userId) {
+            return res.status(404).json({ message: 'Parent comment not found' });
+        }
+
+        const replies = await Comment.find({
+            parentId: parentComment._id,
+            isDeleted: false
+        })
+            .populate('userId', 'name email avatar')
+            .sort({ createdAt: 1 })
+            .lean();
+
+        const processedReplies = replies
+            .filter(reply => !!reply.userId)
+            .map(reply => serializeComment(reply, userId));
+
+        res.json({
+            success: true,
+            data: {
+                ...serializeComment(parentComment, userId),
+                replies: processedReplies
+            },
+            targetCommentId: String(targetComment._id),
+            parentCommentId: String(parentComment._id)
+        });
+    } catch (error) {
+        console.error('Get comment thread error:', error);
+        res.status(500).json({ message: 'Server error' });
+    }
+};
+
 // POST /api/comments - Tạo comment mới
 const createComment = async (req, res) => {
     try {
@@ -306,8 +423,9 @@ const createComment = async (req, res) => {
         }
 
         // If it's a reply, check if parent comment exists
+        let parentComment = null;
         if (parentId) {
-            const parentComment = await Comment.findById(parentId);
+            parentComment = await Comment.findById(parentId);
             if (!parentComment) {
                 return res.status(404).json({ message: 'Parent comment not found' });
             }
@@ -335,6 +453,22 @@ const createComment = async (req, res) => {
             .populate('userId', 'name email avatar')
             .lean();
 
+        if (parentComment && !parentComment.userId.equals(userId)) {
+            await createNotificationSafely({
+                recipientId: parentComment.userId,
+                actorId: userId,
+                type: 'comment_replied',
+                metadata: {
+                    movieId: parseInt(movieId, 10),
+                    contentType: type,
+                    commentId: comment._id,
+                    parentCommentId: parentComment._id,
+                    commentPreview: content.trim().substring(0, 160)
+                },
+                io: req.app.get('io')
+            });
+        }
+
         res.status(201).json({
             success: true,
             message: 'Comment created successfully',
@@ -361,7 +495,27 @@ const toggleLike = async (req, res) => {
             return res.status(404).json({ message: 'Comment not found' });
         }
 
+        const wasLiked = comment.hasUserLiked(userId);
+
         await comment.toggleLike(userId);
+
+        const isLikedNow = comment.hasUserLiked(userId);
+
+        if (!wasLiked && isLikedNow && !comment.userId.equals(userId)) {
+            await createNotificationSafely({
+                recipientId: comment.userId,
+                actorId: userId,
+                type: 'comment_liked',
+                metadata: {
+                    movieId: comment.movieId,
+                    contentType: comment.type,
+                    commentId: comment._id,
+                    parentCommentId: comment.parentId || undefined,
+                    commentPreview: comment.content.substring(0, 160)
+                },
+                io: req.app.get('io')
+            });
+        }
 
         const updatedComment = await Comment.findById(id)
             .populate('userId', 'name email avatar')
@@ -439,8 +593,11 @@ const deleteComment = async (req, res) => {
         }
 
         // HARD DELETE with simple cascading for replies
+        const deletedCommentIds = [comment._id];
         if (!comment.parentId) {
             // Delete all replies of this top-level comment
+            const replies = await Comment.find({ parentId: id }).select('_id').lean();
+            deletedCommentIds.push(...replies.map(reply => reply._id));
             await Comment.deleteMany({ parentId: id });
         } else {
             // Pull this reply reference out of parent.replies
@@ -448,6 +605,7 @@ const deleteComment = async (req, res) => {
         }
 
         await Comment.deleteOne({ _id: id });
+        await notificationService.deleteNotificationsForComments(deletedCommentIds);
 
         res.json({
             success: true,
@@ -473,7 +631,7 @@ const getReplies = async (req, res) => {
             .sort({ createdAt: 1 })
             .lean();
 
-        const processedReplies = replies.map(reply => ({
+        const processedReplies = replies.filter(reply => !!reply.userId).map(reply => ({
             ...reply,
             isLiked: userId ? reply.likedBy.some(id => id.equals(userId)) : false,
             likedBy: undefined
@@ -495,6 +653,7 @@ module.exports = {
     getRecentComments,
     getUserComments,
     getCommentsByMovie,
+    getCommentThread,
     createComment,
     toggleLike,
     updateComment,
