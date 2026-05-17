@@ -1,8 +1,10 @@
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const axios = require('axios');
-const { BrevoClient } = require('@getbrevo/brevo');
-const brevo = new BrevoClient({ apiKey: process.env.BREVO_API_KEY || '' });
+const brevoSdk = require('@getbrevo/brevo');
+
+const brevoEmailApi = new brevoSdk.TransactionalEmailsApi();
+brevoEmailApi.setApiKey(brevoSdk.TransactionalEmailsApiApiKeys.apiKey, process.env.BREVO_API_KEY || '');
 const { optimizeAvatar } = require('../utils/avatarOptimizer');
 const { RateLimiterMemory } = require('rate-limiter-flexible');
 
@@ -124,12 +126,12 @@ function buildVerificationEmailHtml(name, verifyUrl) {
 }
 
 async function sendVerificationEmail(email, name, verifyUrl, subject) {
-    await brevo.transactionalEmails.sendTransacEmail({
-        to: [{ email }],
-        sender: { email: process.env.BREVO_SENDER_EMAIL, name: process.env.BREVO_SENDER_NAME || 'Entertainment World' },
-        subject: subject || 'Entertainment World Account Email Verification',
-        htmlContent: buildVerificationEmailHtml(name, verifyUrl)
-    });
+    const sendSmtpEmail = new brevoSdk.SendSmtpEmail();
+    sendSmtpEmail.to = [{ email }];
+    sendSmtpEmail.sender = { email: process.env.BREVO_SENDER_EMAIL, name: process.env.BREVO_SENDER_NAME || 'Entertainment World' };
+    sendSmtpEmail.subject = subject || 'Entertainment World Account Email Verification';
+    sendSmtpEmail.htmlContent = buildVerificationEmailHtml(name, verifyUrl);
+    await brevoEmailApi.sendTransacEmail(sendSmtpEmail);
 }
 
 function buildPasswordResetEmailHtml(name, resetUrl) {
@@ -162,12 +164,12 @@ function buildPasswordResetEmailHtml(name, resetUrl) {
 }
 
 async function sendPasswordResetEmail(email, name, resetUrl) {
-    await brevo.transactionalEmails.sendTransacEmail({
-        to: [{ email }],
-        sender: { email: process.env.BREVO_SENDER_EMAIL, name: process.env.BREVO_SENDER_NAME || 'Entertainment World' },
-        subject: 'Reset your Entertainment World password',
-        htmlContent: buildPasswordResetEmailHtml(name, resetUrl),
-    });
+    const sendSmtpEmail = new brevoSdk.SendSmtpEmail();
+    sendSmtpEmail.to = [{ email }];
+    sendSmtpEmail.sender = { email: process.env.BREVO_SENDER_EMAIL, name: process.env.BREVO_SENDER_NAME || 'Entertainment World' };
+    sendSmtpEmail.subject = 'Reset your Entertainment World password';
+    sendSmtpEmail.htmlContent = buildPasswordResetEmailHtml(name, resetUrl);
+    await brevoEmailApi.sendTransacEmail(sendSmtpEmail);
 }
 
 async function consumeRateLimit(ip) {
