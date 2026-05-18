@@ -90,7 +90,7 @@ commentSchema.statics.getCommentsWithUserInfo = async function(movieId, type, us
     parentId: null, 
     isDeleted: false 
   })
-  .populate('userId', 'name email avatar')
+  .populate('userId', 'name avatar')
   .sort({ createdAt: -1 })
   .lean();
 
@@ -101,7 +101,7 @@ commentSchema.statics.getCommentsWithUserInfo = async function(movieId, type, us
         parentId: comment._id, 
         isDeleted: false 
       })
-      .populate('userId', 'name email avatar')
+      .populate('userId', 'name avatar')
       .sort({ createdAt: 1 })
       .lean();
 

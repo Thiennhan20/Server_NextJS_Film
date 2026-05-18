@@ -29,7 +29,7 @@ function pickClosestToNotification(comments, notification) {
 
 async function serializeNotification(notificationId) {
   return Notification.findById(notificationId)
-    .populate('actor', 'name email avatar')
+    .populate('actor', 'name avatar')
     .lean();
 }
 

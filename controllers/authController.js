@@ -1,6 +1,7 @@
 const { validationResult } = require('express-validator');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const WatchProgress = require('../models/WatchProgress');
 const BlacklistedToken = require('../models/BlacklistedToken');
 const { optimizeAvatar, base64ToBuffer, validateImage } = require('../utils/avatarOptimizer');
 const authService = require('../services/authService');
@@ -479,6 +480,51 @@ const getProfile = async (req, res) => {
     }
 };
 
+// Get public profile
+const getPublicProfile = async (req, res) => {
+    try {
+        const user = await User.findById(req.params.id).select('name avatar originalAvatar createdAt friends');
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        const viewerId = req.user ? req.user.toString() : null;
+        const isOwner = viewerId && user._id.toString() === viewerId;
+        const isFriend = viewerId && user.friends?.some(friendId => friendId.toString() === viewerId);
+        const canViewRecentlyWatched = isOwner || isFriend;
+
+        const recentlyWatched = canViewRecentlyWatched
+            ? await WatchProgress.aggregate([
+                { $match: { userId: user._id } },
+                { $sort: { lastWatched: -1 } },
+                {
+                    $group: {
+                        _id: "$contentId",
+                        doc: { $first: "$$ROOT" }
+                    }
+                },
+                { $replaceRoot: { newRoot: "$doc" } },
+                { $sort: { lastWatched: -1 } },
+                { $limit: 20 },
+                { $project: { contentId: 1, isTVShow: 1, title: 1, poster: 1 } }
+            ])
+            : [];
+
+        res.json({
+            user: {
+                _id: user._id,
+                name: user.name,
+                avatar: user.avatar,
+                originalAvatar: user.originalAvatar,
+                createdAt: user.createdAt,
+            },
+            recentlyWatched
+        });
+    } catch {
+        res.status(500).json({ message: 'Server error' });
+    }
+};
+
 // Update profile
 const updateProfile = async (req, res) => {
     try {
@@ -719,6 +765,7 @@ module.exports = {
 
     logout,
     getProfile,
+    getPublicProfile,
     updateProfile,
     verifyEmail,
     checkEmailVerified,

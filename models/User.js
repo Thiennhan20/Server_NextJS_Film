@@ -58,6 +58,15 @@ const userSchema = new mongoose.Schema({
       type: { type: String, enum: ['movie', 'tv'], default: 'movie' }
     }
   ],
+  friends: [
+    { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+  ],
+  friendRequests: [
+    { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+  ],
+  sentFriendRequests: [
+    { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+  ],
   createdAt: {
     type: Date,
     default: Date.now

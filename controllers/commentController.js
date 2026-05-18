@@ -38,7 +38,6 @@ const buildPopulateUserShapeStages = () => ([
             userId: {
                 _id: '$userDoc._id',
                 name: '$userDoc.name',
-                email: '$userDoc.email',
                 avatar: '$userDoc.avatar'
             }
         }
@@ -218,7 +217,7 @@ const getUserComments = async (req, res) => {
         const [total, comments] = await Promise.all([
             Comment.countDocuments(query),
             Comment.find(query)
-                .populate('userId', 'name email avatar')
+                .populate('userId', 'name avatar')
                 .sort({ createdAt: -1 })
                 .skip(skip)
                 .limit(limit)
@@ -310,7 +309,7 @@ const getCommentsByMovie = async (req, res) => {
         // Batched fetch of replies for current page comments
         const replies = topIds.length
             ? await Comment.find({ parentId: { $in: topIds }, isDeleted: false })
-                .populate('userId', 'name email avatar')
+                .populate('userId', 'name avatar')
                 .sort({ createdAt: 1 })
                 .lean()
             : [];
@@ -361,7 +360,7 @@ const getCommentThread = async (req, res) => {
             _id: id,
             isDeleted: false
         })
-            .populate('userId', 'name email avatar')
+            .populate('userId', 'name avatar')
             .lean();
 
         if (!targetComment || !targetComment.userId) {
@@ -375,7 +374,7 @@ const getCommentThread = async (req, res) => {
                 parentId: null,
                 isDeleted: false
             })
-                .populate('userId', 'name email avatar')
+                .populate('userId', 'name avatar')
                 .lean()
             : targetComment;
 
@@ -387,7 +386,7 @@ const getCommentThread = async (req, res) => {
             parentId: parentComment._id,
             isDeleted: false
         })
-            .populate('userId', 'name email avatar')
+            .populate('userId', 'name avatar')
             .sort({ createdAt: 1 })
             .lean();
 
@@ -417,7 +416,7 @@ const createComment = async (req, res) => {
         const userId = req.user;
 
         // Get user info
-        const user = await User.findById(userId).select('name email avatar');
+        const user = await User.findById(userId).select('name avatar');
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
         }
@@ -450,7 +449,7 @@ const createComment = async (req, res) => {
 
         // Populate user info for response
         const populatedComment = await Comment.findById(comment._id)
-            .populate('userId', 'name email avatar')
+            .populate('userId', 'name avatar')
             .lean();
 
         if (parentComment && !parentComment.userId.equals(userId)) {
@@ -518,7 +517,7 @@ const toggleLike = async (req, res) => {
         }
 
         const updatedComment = await Comment.findById(id)
-            .populate('userId', 'name email avatar')
+            .populate('userId', 'name avatar')
             .lean();
 
         res.json({
@@ -559,7 +558,7 @@ const updateComment = async (req, res) => {
         await comment.save();
 
         const updated = await Comment.findById(id)
-            .populate('userId', 'name email avatar')
+            .populate('userId', 'name avatar')
             .lean();
 
         res.json({
@@ -627,7 +626,7 @@ const getReplies = async (req, res) => {
             parentId: id,
             isDeleted: false
         })
-            .populate('userId', 'name email avatar')
+            .populate('userId', 'name avatar')
             .sort({ createdAt: 1 })
             .lean();
 

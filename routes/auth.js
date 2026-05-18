@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { body } = require('express-validator');
 const auth = require('../middleware/auth');
+const optionalAuth = require('../middleware/optionalAuth');
 const authController = require('../controllers/authController');
 
 // Register route
@@ -28,6 +29,9 @@ router.post('/logout', auth, authController.logout);
 
 // Protected route - Get profile
 router.get('/profile', auth, authController.getProfile);
+
+// Public profile
+router.get('/profile/:id', optionalAuth, authController.getPublicProfile);
 
 // Update user profile (avatar, name)
 router.put('/profile', auth, authController.updateProfile);
