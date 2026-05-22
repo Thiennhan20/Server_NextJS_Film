@@ -82,7 +82,8 @@ const upsertProgress = async (req, res) => {
             currentTime,
             duration,
             title = '',
-            poster = ''
+            poster = '',
+            watchUrl = ''
         } = req.body || {};
 
         const errors = validateUpsert(req.body);
@@ -103,6 +104,7 @@ const upsertProgress = async (req, res) => {
                 audio: normAudio,
                 title,
                 poster,
+                watchUrl,
                 lastWatched: new Date(),
             },
         };

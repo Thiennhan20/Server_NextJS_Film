@@ -12,6 +12,7 @@ const watchProgressSchema = new mongoose.Schema({
   duration: { type: Number, default: 0 },
   title: { type: String, default: '' },
   poster: { type: String, default: '' },
+  watchUrl: { type: String, default: '' },
   lastWatched: { type: Date, default: Date.now },
 }, { timestamps: true });
 
