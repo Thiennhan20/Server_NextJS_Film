@@ -838,9 +838,16 @@ const googleMobileInit = (req, res) => {
 
 // Bước 2: Nhận callback từ Google, tạo/tìm user, trả về HTML page redirect về app
 const googleMobileCallback = async (req, res) => {
-    // Helper: trả về HTML page redirect tới deep link (thay vì 302 redirect)
+    // Helper: trả về HTML page redirect tới deep link
+    // Dùng Android Intent URL để Chrome mở Expo Go app trực tiếp
     const sendDeepLink = (url) => {
-        res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Redirecting...</title></head><body style="background:#000;color:#fff;font-family:sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;margin:0"><p style="font-size:18px">Đang chuyển về app...</p><p style="margin-top:20px"><a href="${url}" style="color:#E50914;font-size:16px;text-decoration:underline">Nhấn vào đây nếu không tự chuyển</a></p><script>window.location.href="${url}";</script></body></html>`);
+        // Tách scheme và path: ntnmovie://auth?token=xxx → scheme=ntnmovie, path=auth?token=xxx
+        const [scheme, ...rest] = url.split('://');
+        const path = rest.join('://');
+        // Android Intent URL - cách đáng tin cậy nhất để mở deep link từ Chrome
+        const intentUrl = `intent://${path}#Intent;scheme=${scheme};package=host.exp.exponent;end`;
+        
+        res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Redirecting...</title></head><body style="background:#000;color:#fff;font-family:sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;margin:0"><p style="font-size:18px">Đang chuyển về app...</p><p style="margin-top:20px"><a href="${intentUrl}" style="color:#E50914;font-size:16px;text-decoration:underline;padding:15px 30px;border:1px solid #E50914;border-radius:8px;display:inline-block">Nhấn vào đây để quay lại app</a></p><script>window.location.href="${intentUrl}";setTimeout(function(){window.location.href="${url}";},1500);</script></body></html>`);
     };
 
     try {
