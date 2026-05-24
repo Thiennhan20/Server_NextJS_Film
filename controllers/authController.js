@@ -351,7 +351,7 @@ const login = async (req, res) => {
     }
 };
 
-// Google login / link route (server verifies Google ID token)
+// Google login / link route (server verifies Google ID token or access token from mobile)
 const googleLogin = async (req, res) => {
     try {
         const errors = validationResult(req);
@@ -359,20 +359,68 @@ const googleLogin = async (req, res) => {
             return res.status(400).json({ errors: errors.array() });
         }
 
-        const { credential } = req.body;
+        const { credential, accessToken, userInfo: clientUserInfo } = req.body;
 
-        // Verify Google ID token
-        const { OAuth2Client } = require('google-auth-library');
-        const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
-        const ticket = await client.verifyIdToken({ idToken: credential, audience: process.env.GOOGLE_CLIENT_ID });
-        const payload = ticket.getPayload();
-        if (!payload) return res.status(401).json({ message: 'Invalid Google token' });
+        let email, sub, name, avatar, email_verified;
 
-        const email = payload.email;
-        const sub = payload.sub;
-        const name = payload.name;
-        const avatar = payload.picture;
-        const email_verified = payload.email_verified;
+        if (credential) {
+            // Flow 1: ID Token (from website) — verify with Google Auth Library
+            const { OAuth2Client } = require('google-auth-library');
+            const allowedClientIds = [
+                process.env.GOOGLE_CLIENT_ID,
+                process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID,
+                process.env.GOOGLE_CLIENT_ID_IOS,
+                process.env.GOOGLE_CLIENT_ID_ANDROID,
+            ].filter(Boolean);
+            
+            const primaryClientId = allowedClientIds[0];
+            const client = new OAuth2Client(primaryClientId);
+            const ticket = await client.verifyIdToken({ 
+                idToken: credential, 
+                audience: allowedClientIds 
+            });
+            const payload = ticket.getPayload();
+            if (!payload) return res.status(401).json({ message: 'Invalid Google token' });
+
+            email = payload.email;
+            sub = payload.sub;
+            name = payload.name;
+            avatar = payload.picture;
+            email_verified = payload.email_verified;
+        } else if (accessToken) {
+            // Flow 2: Access Token (from Expo Go mobile app) — verify with Google UserInfo API
+            try {
+                const axios = require('axios');
+                const googleRes = await axios.get('https://www.googleapis.com/userinfo/v2/me', {
+                    headers: { Authorization: `Bearer ${accessToken}` },
+                });
+                
+                const googleUserInfo = googleRes.data;
+                
+                email = googleUserInfo.email;
+                sub = googleUserInfo.id;
+                name = googleUserInfo.name;
+                avatar = googleUserInfo.picture;
+                email_verified = googleUserInfo.verified_email;
+            } catch (fetchError) {
+                // Fallback: if fetch fails but client sent userInfo, use it cautiously
+                if (clientUserInfo && clientUserInfo.email && clientUserInfo.id) {
+                    email = clientUserInfo.email;
+                    sub = clientUserInfo.id;
+                    name = clientUserInfo.name;
+                    avatar = clientUserInfo.picture;
+                    email_verified = clientUserInfo.verified_email;
+                } else {
+                    return res.status(401).json({ message: 'Could not verify Google account' });
+                }
+            }
+        } else {
+            return res.status(400).json({ message: 'Google credential or access token is required' });
+        }
+
+        if (!email) {
+            return res.status(401).json({ message: 'Could not retrieve email from Google account' });
+        }
 
         // Check if Google user already exists (email + authType: 'google')
         let user = await User.findOne({ email, authType: 'google' });
@@ -756,12 +804,146 @@ const deleteUser = async (req, res) => {
     }
 };
 
+// ===== Mobile App Google OAuth (server-side flow) =====
+// Bước 1: Redirect trình duyệt tới Google OAuth
+const googleMobileInit = (req, res) => {
+    try {
+        const clientId = process.env.GOOGLE_CLIENT_ID || process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
+        if (!clientId) {
+            return res.status(500).send('Google Client ID not configured');
+        }
+
+        // GOOGLE_REDIRECT_BASE_URL cho phép cấu hình redirect URI chính xác
+        // Local dev: http://localhost:3001 (Google chấp nhận localhost)
+        // Production: https://server-nextjs-firm.onrender.com
+        const baseUrl = process.env.GOOGLE_REDIRECT_BASE_URL || 
+            `${req.headers['x-forwarded-proto'] || req.protocol}://${req.headers['x-forwarded-host'] || req.get('host')}`;
+        const redirectUri = `${baseUrl}/api/auth/google/mobile-callback`;
+
+        console.log('Google OAuth redirect URI:', redirectUri);
+
+        const authUrl = 'https://accounts.google.com/o/oauth2/v2/auth?' +
+            `client_id=${encodeURIComponent(clientId)}&` +
+            `redirect_uri=${encodeURIComponent(redirectUri)}&` +
+            'response_type=code&' +
+            'scope=openid%20profile%20email&' +
+            'prompt=select_account';
+
+        res.redirect(authUrl);
+    } catch (error) {
+        console.error('Google mobile init error:', error);
+        res.redirect('ntnmovie://auth?error=init_failed');
+    }
+};
+
+// Bước 2: Nhận callback từ Google, tạo/tìm user, redirect về app
+const googleMobileCallback = async (req, res) => {
+    try {
+        const { code, error: googleError } = req.query;
+
+        if (googleError || !code) {
+            return res.redirect(`ntnmovie://auth?error=${googleError || 'no_code'}`);
+        }
+
+        const clientId = process.env.GOOGLE_CLIENT_ID || process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
+        const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+
+        // Phải dùng cùng redirect URI đã dùng ở bước 1
+        const baseUrl = process.env.GOOGLE_REDIRECT_BASE_URL || 
+            `${req.headers['x-forwarded-proto'] || req.protocol}://${req.headers['x-forwarded-host'] || req.get('host')}`;
+        const redirectUri = `${baseUrl}/api/auth/google/mobile-callback`;
+
+        // Đổi authorization code lấy access token
+        const axios = require('axios');
+        const tokenResponse = await axios.post('https://oauth2.googleapis.com/token', {
+            code,
+            client_id: clientId,
+            client_secret: clientSecret,
+            redirect_uri: redirectUri,
+            grant_type: 'authorization_code',
+        });
+
+        const { access_token } = tokenResponse.data;
+
+        // Lấy thông tin user từ Google
+        const userInfoResponse = await axios.get('https://www.googleapis.com/userinfo/v2/me', {
+            headers: { Authorization: `Bearer ${access_token}` },
+        });
+
+        const googleUserInfo = userInfoResponse.data;
+        const email = googleUserInfo.email;
+        const sub = googleUserInfo.id;
+        const name = googleUserInfo.name;
+        const avatar = googleUserInfo.picture;
+        const email_verified = googleUserInfo.verified_email;
+
+        if (!email) {
+            return res.redirect('ntnmovie://auth?error=no_email');
+        }
+
+        // Tìm hoặc tạo user (logic giống googleLogin)
+        let user = await User.findOne({ email, authType: 'google' });
+
+        if (user) {
+            // User đã tồn tại — cập nhật info
+            if (name && user.name !== name) user.name = name;
+
+            if (avatar) {
+                if (!user.originalAvatar || user.originalAvatar === '' || user.originalAvatar.startsWith('http')) {
+                    try {
+                        const optimizedAvatar = await authService.downloadAndOptimizeAvatar(avatar);
+                        user.originalAvatar = optimizedAvatar;
+                    } catch { /* ignore optimization errors */ }
+                }
+                if (!user.avatar || user.avatar === '' || user.avatar.startsWith('http')) {
+                    user.avatar = user.originalAvatar || avatar;
+                }
+            }
+            await user.save();
+        } else {
+            // User mới — tạo account
+            let optimizedAvatar = '';
+            if (avatar) {
+                try {
+                    optimizedAvatar = await authService.downloadAndOptimizeAvatar(avatar);
+                } catch { optimizedAvatar = ''; }
+            }
+
+            user = await User.findOneAndUpdate(
+                { email, authType: 'google' },
+                {
+                    name: name || email,
+                    email,
+                    authType: 'google',
+                    providerId: sub,
+                    avatar: optimizedAvatar,
+                    originalAvatar: optimizedAvatar,
+                    isEmailVerified: !!email_verified,
+                    emailVerificationToken: ''
+                },
+                { upsert: true, new: true, setDefaultsOnInsert: true }
+            );
+        }
+
+        // Tạo JWT token
+        const token = authService.createToken(user._id);
+
+        // Redirect về app bằng deep link
+        res.redirect(`ntnmovie://auth?token=${token}`);
+    } catch (error) {
+        console.error('Google mobile callback error:', error.response?.data || error.message);
+        res.redirect('ntnmovie://auth?error=server_error');
+    }
+};
+
 module.exports = {
     validateRequest,
     rateLimitMiddleware,
     register,
     login,
     googleLogin,
+    googleMobileInit,
+    googleMobileCallback,
 
     logout,
     getProfile,

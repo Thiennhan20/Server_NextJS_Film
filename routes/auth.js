@@ -18,11 +18,21 @@ router.post('/login', [
   body('password').exists().withMessage('Password is required'),
 ], authController.login);
 
-// Google login / link route (server verifies Google ID token)
+// Google login / link route (server verifies Google ID token or access token)
 router.post('/google-login', [
-  body('credential').notEmpty().withMessage('Google credential (ID token) is required'),
+  body().custom((value, { req }) => {
+    if (!req.body.credential && !req.body.accessToken) {
+      throw new Error('Google credential or access token is required');
+    }
+    return true;
+  }),
 ], authController.googleLogin);
 
+// ===== Mobile App Google OAuth (server-side flow) =====
+// Bước 1: App mở browser → Server redirect tới Google OAuth
+router.get('/google/mobile', authController.googleMobileInit);
+// Bước 2: Google redirect về server → Server xử lý → Redirect về app bằng deep link
+router.get('/google/mobile-callback', authController.googleMobileCallback);
 
 // Logout route
 router.post('/logout', auth, authController.logout);
