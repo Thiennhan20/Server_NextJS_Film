@@ -836,22 +836,34 @@ const googleMobileInit = (req, res) => {
     }
 };
 
-// Bước 2: Nhận callback từ Google, tạo/tìm user, redirect về app
+// Bước 2: Nhận callback từ Google, tạo/tìm user, trả về HTML page redirect về app
 const googleMobileCallback = async (req, res) => {
+    // Helper: trả về HTML page redirect tới deep link (thay vì 302 redirect)
+    const sendDeepLink = (url) => {
+        res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Redirecting...</title></head><body style="background:#000;color:#fff;font-family:sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;margin:0"><p style="font-size:18px">Đang chuyển về app...</p><p style="margin-top:20px"><a href="${url}" style="color:#E50914;font-size:16px;text-decoration:underline">Nhấn vào đây nếu không tự chuyển</a></p><script>window.location.href="${url}";</script></body></html>`);
+    };
+
     try {
         const { code, error: googleError } = req.query;
 
         if (googleError || !code) {
-            return res.redirect(`ntnmovie://auth?error=${googleError || 'no_code'}`);
+            return sendDeepLink(`ntnmovie://auth?error=${googleError || 'no_code'}`);
         }
 
         const clientId = process.env.GOOGLE_CLIENT_ID || process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
         const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
 
-        // Phải dùng cùng redirect URI đã dùng ở bước 1
-        const baseUrl = process.env.GOOGLE_REDIRECT_BASE_URL || 
-            `${req.headers['x-forwarded-proto'] || req.protocol}://${req.headers['x-forwarded-host'] || req.get('host')}`;
-        const redirectUri = `${baseUrl}/api/auth/google/mobile-callback`;
+        if (!clientId || !clientSecret) {
+            console.error('Missing GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET');
+            return sendDeepLink('ntnmovie://auth?error=server_config');
+        }
+
+        // Construct redirect URI from request (works on both Render and local)
+        const protocol = req.headers['x-forwarded-proto'] || req.protocol;
+        const host = req.headers['x-forwarded-host'] || req.get('host');
+        const redirectUri = `${protocol}://${host}/api/auth/google/mobile-callback`;
+
+        console.log('Google callback - redirectUri:', redirectUri);
 
         // Đổi authorization code lấy access token
         const axios = require('axios');
@@ -878,37 +890,20 @@ const googleMobileCallback = async (req, res) => {
         const email_verified = googleUserInfo.verified_email;
 
         if (!email) {
-            return res.redirect('ntnmovie://auth?error=no_email');
+            return sendDeepLink('ntnmovie://auth?error=no_email');
         }
 
-        // Tìm hoặc tạo user (logic giống googleLogin)
+        // Tìm hoặc tạo user (bỏ avatar optimization để tránh timeout)
         let user = await User.findOne({ email, authType: 'google' });
 
         if (user) {
-            // User đã tồn tại — cập nhật info
             if (name && user.name !== name) user.name = name;
-
-            if (avatar) {
-                if (!user.originalAvatar || user.originalAvatar === '' || user.originalAvatar.startsWith('http')) {
-                    try {
-                        const optimizedAvatar = await authService.downloadAndOptimizeAvatar(avatar);
-                        user.originalAvatar = optimizedAvatar;
-                    } catch { /* ignore optimization errors */ }
-                }
-                if (!user.avatar || user.avatar === '' || user.avatar.startsWith('http')) {
-                    user.avatar = user.originalAvatar || avatar;
-                }
+            if (avatar && (!user.avatar || user.avatar === '')) {
+                user.avatar = avatar;
+                user.originalAvatar = avatar;
             }
             await user.save();
         } else {
-            // User mới — tạo account
-            let optimizedAvatar = '';
-            if (avatar) {
-                try {
-                    optimizedAvatar = await authService.downloadAndOptimizeAvatar(avatar);
-                } catch { optimizedAvatar = ''; }
-            }
-
             user = await User.findOneAndUpdate(
                 { email, authType: 'google' },
                 {
@@ -916,8 +911,8 @@ const googleMobileCallback = async (req, res) => {
                     email,
                     authType: 'google',
                     providerId: sub,
-                    avatar: optimizedAvatar,
-                    originalAvatar: optimizedAvatar,
+                    avatar: avatar || '',
+                    originalAvatar: avatar || '',
                     isEmailVerified: !!email_verified,
                     emailVerificationToken: ''
                 },
@@ -928,11 +923,12 @@ const googleMobileCallback = async (req, res) => {
         // Tạo JWT token
         const token = authService.createToken(user._id);
 
-        // Redirect về app bằng deep link
-        res.redirect(`ntnmovie://auth?token=${token}`);
+        // Trả về HTML page sẽ redirect về app bằng JavaScript
+        console.log('Google login success for:', email);
+        sendDeepLink(`ntnmovie://auth?token=${token}`);
     } catch (error) {
         console.error('Google mobile callback error:', error.response?.data || error.message);
-        res.redirect('ntnmovie://auth?error=server_error');
+        sendDeepLink('ntnmovie://auth?error=server_error');
     }
 };
 
