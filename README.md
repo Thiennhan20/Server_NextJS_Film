@@ -237,11 +237,26 @@ MONGODB_URI=               # MongoDB connection string
 JWT_SECRET=                # JWT signing secret
 JWT_REFRESH_SECRET=        # Refresh token secret
 GOOGLE_CLIENT_ID=          # Google OAuth client ID
+GOOGLE_CLIENT_SECRET=      # Google OAuth web client secret
+GOOGLE_REDIRECT_BASE_URL=  # Public API origin, for example https://api.example.com
 BREVO_API_KEY=             # Brevo transactional email
 UPSTASH_REDIS_URL=         # Redis connection URL
 TMDB_API_KEY=              # TMDB API key
 CLIENT_URL=                # Frontend URL (CORS)
 ```
+
+### Google Login For The Mobile App
+
+The Expo app starts Google sign-in through `GET /api/auth/google/mobile`; the
+server owns the Google client secret and redirects the completed session back
+to the app. In Google Cloud Console, add this authorized redirect URI exactly:
+
+```text
+<GOOGLE_REDIRECT_BASE_URL>/api/auth/google/mobile-callback
+```
+
+For production, `GOOGLE_REDIRECT_BASE_URL` must be the public HTTPS origin of
+this server. The app does not need Google client secrets or client IDs.
 
 ### Development
 
