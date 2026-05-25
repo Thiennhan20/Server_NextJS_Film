@@ -359,7 +359,7 @@ const googleLogin = async (req, res) => {
             return res.status(400).json({ errors: errors.array() });
         }
 
-        const { credential, accessToken, userInfo: clientUserInfo } = req.body;
+        const { credential, accessToken } = req.body;
 
         let email, sub, name, avatar, email_verified;
 
@@ -402,17 +402,8 @@ const googleLogin = async (req, res) => {
                 name = googleUserInfo.name;
                 avatar = googleUserInfo.picture;
                 email_verified = googleUserInfo.verified_email;
-            } catch (fetchError) {
-                // Fallback: if fetch fails but client sent userInfo, use it cautiously
-                if (clientUserInfo && clientUserInfo.email && clientUserInfo.id) {
-                    email = clientUserInfo.email;
-                    sub = clientUserInfo.id;
-                    name = clientUserInfo.name;
-                    avatar = clientUserInfo.picture;
-                    email_verified = clientUserInfo.verified_email;
-                } else {
-                    return res.status(401).json({ message: 'Could not verify Google account' });
-                }
+            } catch {
+                return res.status(401).json({ message: 'Could not verify Google account' });
             }
         } else {
             return res.status(400).json({ message: 'Google credential or access token is required' });
@@ -806,19 +797,99 @@ const deleteUser = async (req, res) => {
 
 // ===== Mobile App Google OAuth (server-side flow) =====
 // Bước 1: Redirect trình duyệt tới Google OAuth
-const googleMobileInit = (req, res) => {
+const DEFAULT_MOBILE_RETURN_URI = 'ntnmovie://auth';
+const GOOGLE_MOBILE_STATE_AUDIENCE = 'google-mobile-oauth';
+const GOOGLE_MOBILE_STATE_ISSUER = 'ntn-server';
+
+const getGoogleMobileRedirectUri = (req) => {
+    const baseUrl = process.env.GOOGLE_REDIRECT_BASE_URL ||
+        `${req.headers['x-forwarded-proto'] || req.protocol}://${req.headers['x-forwarded-host'] || req.get('host')}`;
+    return `${baseUrl.replace(/\/$/, '')}/api/auth/google/mobile-callback`;
+};
+
+const getValidMobileReturnUri = (candidate) => {
+    if (!candidate) return DEFAULT_MOBILE_RETURN_URI;
+    if (typeof candidate !== 'string' || candidate.length > 2048) return null;
+
     try {
+        const parsed = new URL(candidate);
+        if (parsed.username || parsed.password || parsed.hash || parsed.search) return null;
+
+        const isNativeAppUri = parsed.protocol === 'ntnmovie:' &&
+            (parsed.hostname === 'auth' || parsed.pathname === '/auth');
+        const isExpoGoUri = parsed.protocol === 'exp:' && parsed.pathname.endsWith('/--/auth');
+
+        return isNativeAppUri || isExpoGoUri ? parsed.toString() : null;
+    } catch {
+        return null;
+    }
+};
+
+const createGoogleMobileState = (returnUri) => jwt.sign(
+    { returnUri, nonce: crypto.randomBytes(16).toString('hex') },
+    process.env.JWT_SECRET,
+    {
+        expiresIn: '10m',
+        audience: GOOGLE_MOBILE_STATE_AUDIENCE,
+        issuer: GOOGLE_MOBILE_STATE_ISSUER
+    }
+);
+
+const readGoogleMobileReturnUri = (state) => {
+    if (!state || !process.env.JWT_SECRET) return null;
+
+    try {
+        const payload = jwt.verify(state, process.env.JWT_SECRET, {
+            audience: GOOGLE_MOBILE_STATE_AUDIENCE,
+            issuer: GOOGLE_MOBILE_STATE_ISSUER
+        });
+        return getValidMobileReturnUri(payload.returnUri);
+    } catch {
+        return null;
+    }
+};
+
+const escapeHtml = (value) => String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+const sendMobileAuthRedirect = (req, res, returnUri, params) => {
+    const callbackUri = new URL(returnUri);
+    Object.entries(params).forEach(([key, value]) => callbackUri.searchParams.set(key, value));
+
+    const callbackUrl = callbackUri.toString();
+    const isAndroidExpoGo = callbackUri.protocol === 'exp:' && /android/i.test(req.get('user-agent') || '');
+    const launchUrl = isAndroidExpoGo
+        ? `intent://${callbackUrl.slice('exp://'.length)}#Intent;scheme=exp;package=host.exp.exponent;end`
+        : callbackUrl;
+    const launchJson = JSON.stringify(launchUrl).replace(/</g, '\\u003c');
+    const callbackJson = JSON.stringify(callbackUrl).replace(/</g, '\\u003c');
+
+    res.type('html').send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Returning to NTN</title></head><body style="background:#000;color:#fff;font-family:sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;margin:0"><p style="font-size:18px">Returning to the app...</p><p style="margin-top:20px"><a href="${escapeHtml(launchUrl)}" style="color:#E50914;font-size:16px;text-decoration:underline;padding:15px 30px;border:1px solid #E50914;border-radius:8px;display:inline-block">Open NTN</a></p><script>window.location.replace(${launchJson});setTimeout(function(){window.location.replace(${callbackJson});},1000);</script></body></html>`);
+};
+
+const googleMobileInit = (req, res) => {
+    let returnUri = DEFAULT_MOBILE_RETURN_URI;
+
+    try {
+        const requestedReturnUri = getValidMobileReturnUri(req.query.return_uri);
+        if (!requestedReturnUri) {
+            return res.status(400).send('Invalid mobile return URI');
+        }
+        returnUri = requestedReturnUri;
+
         const clientId = process.env.GOOGLE_CLIENT_ID || process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
-        if (!clientId) {
-            return res.status(500).send('Google Client ID not configured');
+        if (!clientId || !process.env.JWT_SECRET) {
+            return sendMobileAuthRedirect(req, res, returnUri, { error: 'server_config' });
         }
 
         // GOOGLE_REDIRECT_BASE_URL cho phép cấu hình redirect URI chính xác
         // Local dev: http://localhost:3001 (Google chấp nhận localhost)
         // Production: https://server-nextjs-firm.onrender.com
-        const baseUrl = process.env.GOOGLE_REDIRECT_BASE_URL || 
-            `${req.headers['x-forwarded-proto'] || req.protocol}://${req.headers['x-forwarded-host'] || req.get('host')}`;
-        const redirectUri = `${baseUrl}/api/auth/google/mobile-callback`;
+        const redirectUri = getGoogleMobileRedirectUri(req);
+        const state = createGoogleMobileState(returnUri);
 
         console.log('Google OAuth redirect URI:', redirectUri);
 
@@ -827,34 +898,31 @@ const googleMobileInit = (req, res) => {
             `redirect_uri=${encodeURIComponent(redirectUri)}&` +
             'response_type=code&' +
             'scope=openid%20profile%20email&' +
-            'prompt=select_account';
+            'prompt=select_account&' +
+            `state=${encodeURIComponent(state)}`;
 
         res.redirect(authUrl);
     } catch (error) {
         console.error('Google mobile init error:', error);
-        res.redirect('ntnmovie://auth?error=init_failed');
+        sendMobileAuthRedirect(req, res, returnUri, { error: 'init_failed' });
     }
 };
 
 // Bước 2: Nhận callback từ Google, tạo/tìm user, trả về HTML page redirect về app
 const googleMobileCallback = async (req, res) => {
-    // Helper: trả về HTML page redirect tới deep link
-    // Dùng Android Intent URL để Chrome mở Expo Go app trực tiếp
-    const sendDeepLink = (url) => {
-        // Tách scheme và path: ntnmovie://auth?token=xxx → scheme=ntnmovie, path=auth?token=xxx
-        const [scheme, ...rest] = url.split('://');
-        const path = rest.join('://');
-        // Android Intent URL - cách đáng tin cậy nhất để mở deep link từ Chrome
-        const intentUrl = `intent://${path}#Intent;scheme=${scheme};package=host.exp.exponent;end`;
-        
-        res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Redirecting...</title></head><body style="background:#000;color:#fff;font-family:sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;margin:0"><p style="font-size:18px">Đang chuyển về app...</p><p style="margin-top:20px"><a href="${intentUrl}" style="color:#E50914;font-size:16px;text-decoration:underline;padding:15px 30px;border:1px solid #E50914;border-radius:8px;display:inline-block">Nhấn vào đây để quay lại app</a></p><script>window.location.href="${intentUrl}";setTimeout(function(){window.location.href="${url}";},1500);</script></body></html>`);
-    };
+    let returnUri = DEFAULT_MOBILE_RETURN_URI;
+    const sendResult = (params) => sendMobileAuthRedirect(req, res, returnUri, params);
 
     try {
-        const { code, error: googleError } = req.query;
+        const { code, error: googleError, state } = req.query;
+        const signedReturnUri = readGoogleMobileReturnUri(state);
+        if (!signedReturnUri) {
+            return sendResult({ error: 'invalid_state' });
+        }
+        returnUri = signedReturnUri;
 
         if (googleError || !code) {
-            return sendDeepLink(`ntnmovie://auth?error=${googleError || 'no_code'}`);
+            return sendResult({ error: googleError || 'no_code' });
         }
 
         const clientId = process.env.GOOGLE_CLIENT_ID || process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
@@ -862,13 +930,11 @@ const googleMobileCallback = async (req, res) => {
 
         if (!clientId || !clientSecret) {
             console.error('Missing GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET');
-            return sendDeepLink('ntnmovie://auth?error=server_config');
+            return sendResult({ error: 'server_config' });
         }
 
         // Construct redirect URI from request (works on both Render and local)
-        const protocol = req.headers['x-forwarded-proto'] || req.protocol;
-        const host = req.headers['x-forwarded-host'] || req.get('host');
-        const redirectUri = `${protocol}://${host}/api/auth/google/mobile-callback`;
+        const redirectUri = getGoogleMobileRedirectUri(req);
 
         console.log('Google callback - redirectUri:', redirectUri);
 
@@ -897,7 +963,7 @@ const googleMobileCallback = async (req, res) => {
         const email_verified = googleUserInfo.verified_email;
 
         if (!email) {
-            return sendDeepLink('ntnmovie://auth?error=no_email');
+            return sendResult({ error: 'no_email' });
         }
 
         // Tìm hoặc tạo user (bỏ avatar optimization để tránh timeout)
@@ -932,10 +998,10 @@ const googleMobileCallback = async (req, res) => {
 
         // Trả về HTML page sẽ redirect về app bằng JavaScript
         console.log('Google login success for:', email);
-        sendDeepLink(`ntnmovie://auth?token=${token}`);
+        sendResult({ token });
     } catch (error) {
         console.error('Google mobile callback error:', error.response?.data || error.message);
-        sendDeepLink('ntnmovie://auth?error=server_error');
+        sendResult({ error: 'server_error' });
     }
 };
 
