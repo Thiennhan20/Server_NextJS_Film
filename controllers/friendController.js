@@ -52,8 +52,7 @@ const sendRequest = async (req, res) => {
             recipientId: id,
             actorId: currentUserId,
             type: 'friend_request',
-            metadata: {},
-            io: req.app.get('io')
+            metadata: {}
         });
 
         res.json({ message: "Friend request sent successfully." });
@@ -100,8 +99,7 @@ const acceptRequest = async (req, res) => {
             recipientId: requestingUser._id,
             actorId: currentUserId,
             type: 'friend_accept',
-            metadata: {},
-            io: req.app.get('io')
+            metadata: {}
         });
 
         res.json({ message: "Friend request accepted." });

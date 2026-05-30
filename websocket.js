@@ -8,7 +8,6 @@
 const { Server } = require('socket.io');
 const jwt = require('jsonwebtoken');
 const roomService = require('./services/roomService');
-const initializeNotificationSocket = require('./notificationSocket');
 
 const GRACE_PERIOD_MS = 30000;   // 30 seconds
 const HEARTBEAT_TIMEOUT_MS = 45000; // 45 seconds (3 missed heartbeats)
@@ -30,8 +29,6 @@ function initializeWebSocket(server) {
       credentials: true
     }
   });
-
-  initializeNotificationSocket(io);
 
   // ════════════════════════════════════════════════════════════
   //  DEFAULT NAMESPACE — Global Chat (legacy, giữ nguyên)
@@ -108,16 +105,18 @@ function initializeWebSocket(server) {
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
       socket.userId = decoded.userId;
       socket.username = decoded.name || decoded.username || 'User';
+      socket.avatar = '';
 
-      // Get username from DB if not in token
-      if (!decoded.name && !decoded.username) {
-        try {
-          const User = require('./models/User');
-          const user = await User.findById(decoded.userId).select('name');
-          if (user) socket.username = user.name;
-        } catch {
-          // Use default
+      // Fetch name and avatar from database to ensure fresh and correct details
+      try {
+        const User = require('./models/User');
+        const user = await User.findById(decoded.userId).select('name avatar');
+        if (user) {
+          if (user.name) socket.username = user.name;
+          if (user.avatar) socket.avatar = user.avatar;
         }
+      } catch (err) {
+        console.error('Failed to fetch user details in WS auth middleware:', err);
       }
 
       next();
@@ -194,6 +193,7 @@ function initializeWebSocket(server) {
       roomConns.set(socket.userId, {
         socketId: socket.id,
         username: socket.username,
+        avatar: socket.avatar || '',
         heartbeatTimer: startHeartbeatTimer(socket, roomId),
         graceTimer: null,
       });
@@ -201,6 +201,19 @@ function initializeWebSocket(server) {
       // Get updated member count
       const memberCount = await roomService.getRoomMembers(roomId);
       const isUserHost = room.host_id === socket.userId;
+
+      // Extract list of active room members from roomConnections Map
+      const membersList = [];
+      if (roomConns) {
+        roomConns.forEach((conn, uid) => {
+          membersList.push({
+            user_id: uid,
+            username: conn.username,
+            avatar: conn.avatar || '',
+            is_host: room.host_id === uid,
+          });
+        });
+      }
 
       // Send room status to the joining user
       const roomStatus = {
@@ -212,6 +225,7 @@ function initializeWebSocket(server) {
         title: room.title,
         host_name: room.host_name,
         is_host: isUserHost,
+        members: membersList,
       };
 
       // Host gets stream_url, viewer gets it via WebSocket (needed for HLS.js)
@@ -223,6 +237,7 @@ function initializeWebSocket(server) {
       socket.to(`room:${roomId}`).emit('USER_JOINED', {
         user_id: socket.userId,
         username: socket.username,
+        avatar: socket.avatar || '',
         member_count: memberCount.length,
       });
 

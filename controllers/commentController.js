@@ -57,6 +57,31 @@ const serializeComment = (comment, userId) => {
     };
 };
 
+const collectReplyBranchIds = async (rootId) => {
+    const deletedIds = new Set([String(rootId)]);
+    let frontier = [rootId];
+
+    while (frontier.length > 0) {
+        const children = await Comment.find({
+            replyToComment: { $in: frontier }
+        })
+            .select('_id')
+            .lean();
+
+        frontier = children
+            .map(child => child._id)
+            .filter(childId => {
+                const normalizedId = String(childId);
+                if (deletedIds.has(normalizedId)) return false;
+
+                deletedIds.add(normalizedId);
+                return true;
+            });
+    }
+
+    return Array.from(deletedIds);
+};
+
 // GET /api/comments/top - Lấy top comments (most liked or most replied) for homepage
 const getTopComments = async (req, res) => {
     try {
@@ -218,6 +243,7 @@ const getUserComments = async (req, res) => {
             Comment.countDocuments(query),
             Comment.find(query)
                 .populate('userId', 'name avatar')
+                .populate('replyTo', 'name avatar')
                 .sort({ createdAt: -1 })
                 .skip(skip)
                 .limit(limit)
@@ -310,6 +336,7 @@ const getCommentsByMovie = async (req, res) => {
         const replies = topIds.length
             ? await Comment.find({ parentId: { $in: topIds }, isDeleted: false })
                 .populate('userId', 'name avatar')
+                .populate('replyTo', 'name avatar')
                 .sort({ createdAt: 1 })
                 .lean()
             : [];
@@ -361,6 +388,7 @@ const getCommentThread = async (req, res) => {
             isDeleted: false
         })
             .populate('userId', 'name avatar')
+            .populate('replyTo', 'name avatar')
             .lean();
 
         if (!targetComment || !targetComment.userId) {
@@ -375,6 +403,7 @@ const getCommentThread = async (req, res) => {
                 isDeleted: false
             })
                 .populate('userId', 'name avatar')
+                .populate('replyTo', 'name avatar')
                 .lean()
             : targetComment;
 
@@ -387,6 +416,7 @@ const getCommentThread = async (req, res) => {
             isDeleted: false
         })
             .populate('userId', 'name avatar')
+            .populate('replyTo', 'name avatar')
             .sort({ createdAt: 1 })
             .lean();
 
@@ -421,13 +451,20 @@ const createComment = async (req, res) => {
             return res.status(404).json({ message: 'User not found' });
         }
 
-        // If it's a reply, check if parent comment exists
+        // If replying to a reply, keep the discussion one level deep under the root comment.
         let parentComment = null;
+        let threadParentId = null;
         if (parentId) {
-            parentComment = await Comment.findById(parentId);
+            parentComment = await Comment.findOne({ _id: parentId, isDeleted: false });
             if (!parentComment) {
                 return res.status(404).json({ message: 'Parent comment not found' });
             }
+
+            if (parentComment.movieId !== parseInt(movieId, 10) || parentComment.type !== type) {
+                return res.status(400).json({ message: 'Parent comment does not belong to this title' });
+            }
+
+            threadParentId = parentComment.parentId || parentComment._id;
         }
 
         const comment = new Comment({
@@ -435,14 +472,16 @@ const createComment = async (req, res) => {
             type,
             userId,
             content: content.trim(),
-            parentId: parentId || null
+            parentId: threadParentId,
+            replyTo: parentComment ? parentComment.userId : null,
+            replyToComment: parentComment ? parentComment._id : null
         });
 
         await comment.save();
 
         // If it's a reply, add to parent's replies array
-        if (parentId) {
-            await Comment.findByIdAndUpdate(parentId, {
+        if (threadParentId) {
+            await Comment.findByIdAndUpdate(threadParentId, {
                 $push: { replies: comment._id }
             });
         }
@@ -450,6 +489,7 @@ const createComment = async (req, res) => {
         // Populate user info for response
         const populatedComment = await Comment.findById(comment._id)
             .populate('userId', 'name avatar')
+            .populate('replyTo', 'name avatar')
             .lean();
 
         if (parentComment && !parentComment.userId.equals(userId)) {
@@ -461,10 +501,9 @@ const createComment = async (req, res) => {
                     movieId: parseInt(movieId, 10),
                     contentType: type,
                     commentId: comment._id,
-                    parentCommentId: parentComment._id,
+                    parentCommentId: threadParentId,
                     commentPreview: content.trim().substring(0, 160)
-                },
-                io: req.app.get('io')
+                }
             });
         }
 
@@ -511,8 +550,7 @@ const toggleLike = async (req, res) => {
                     commentId: comment._id,
                     parentCommentId: comment.parentId || undefined,
                     commentPreview: comment.content.substring(0, 160)
-                },
-                io: req.app.get('io')
+                }
             });
         }
 
@@ -556,9 +594,14 @@ const updateComment = async (req, res) => {
 
         comment.content = content.trim();
         await comment.save();
+        await notificationService.updateNotificationsForCommentPreview(
+            comment._id,
+            comment.content.substring(0, 160)
+        );
 
         const updated = await Comment.findById(id)
             .populate('userId', 'name avatar')
+            .populate('replyTo', 'name avatar')
             .lean();
 
         res.json({
@@ -591,24 +634,28 @@ const deleteComment = async (req, res) => {
             return res.status(403).json({ message: 'You can only delete your own comments' });
         }
 
-        // HARD DELETE with simple cascading for replies
-        const deletedCommentIds = [comment._id];
+        let deletedCommentIds = [String(comment._id)];
         if (!comment.parentId) {
             // Delete all replies of this top-level comment
             const replies = await Comment.find({ parentId: id }).select('_id').lean();
-            deletedCommentIds.push(...replies.map(reply => reply._id));
-            await Comment.deleteMany({ parentId: id });
+            deletedCommentIds = [
+                String(comment._id),
+                ...replies.map(reply => String(reply._id))
+            ];
         } else {
-            // Pull this reply reference out of parent.replies
-            await Comment.findByIdAndUpdate(comment.parentId, { $pull: { replies: comment._id } });
+            deletedCommentIds = await collectReplyBranchIds(comment._id);
+            await Comment.findByIdAndUpdate(comment.parentId, {
+                $pull: { replies: { $in: deletedCommentIds } }
+            });
         }
 
-        await Comment.deleteOne({ _id: id });
+        await Comment.deleteMany({ _id: { $in: deletedCommentIds } });
         await notificationService.deleteNotificationsForComments(deletedCommentIds);
 
         res.json({
             success: true,
-            message: 'Comment deleted successfully'
+            message: 'Comment deleted successfully',
+            deletedCommentIds
         });
     } catch (error) {
         console.error('Delete comment error:', error);
@@ -627,6 +674,7 @@ const getReplies = async (req, res) => {
             isDeleted: false
         })
             .populate('userId', 'name avatar')
+            .populate('replyTo', 'name avatar')
             .sort({ createdAt: 1 })
             .lean();
 

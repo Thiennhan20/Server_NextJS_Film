@@ -34,6 +34,16 @@ const commentSchema = new mongoose.Schema({
     ref: 'Comment',
     default: null
   },
+  replyTo: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
+  },
+  replyToComment: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Comment',
+    default: null
+  },
   replies: [{
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Comment'
@@ -102,6 +112,7 @@ commentSchema.statics.getCommentsWithUserInfo = async function(movieId, type, us
         isDeleted: false 
       })
       .populate('userId', 'name avatar')
+      .populate('replyTo', 'name avatar')
       .sort({ createdAt: 1 })
       .lean();
 

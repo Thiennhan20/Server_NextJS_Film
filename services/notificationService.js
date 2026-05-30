@@ -33,19 +33,7 @@ async function serializeNotification(notificationId) {
     .lean();
 }
 
-function emitNotification(io, recipientId, notification) {
-  if (!io || !notification) return;
-
-  try {
-    io.of('/notifications')
-      .to(`user:${normalizeId(recipientId)}`)
-      .emit('notification:new', notification);
-  } catch (error) {
-    console.warn('Notification emit failed:', error.message);
-  }
-}
-
-async function createNotification({ recipientId, actorId = null, type, metadata = {}, io = null }) {
+async function createNotification({ recipientId, actorId = null, type, metadata = {} }) {
   const recipient = normalizeId(recipientId);
   const actor = normalizeId(actorId);
 
@@ -60,7 +48,6 @@ async function createNotification({ recipientId, actorId = null, type, metadata 
   });
 
   const serialized = await serializeNotification(notification._id);
-  emitNotification(io, recipientId, serialized);
 
   return serialized;
 }
@@ -76,6 +63,23 @@ async function deleteNotificationsForComments(commentIds) {
       { 'metadata.parentCommentId': { $in: ids } }
     ]
   });
+}
+
+async function updateNotificationsForCommentPreview(commentId, preview = '') {
+  const id = normalizeId(commentId);
+  if (!id) return { modifiedCount: 0 };
+
+  return Notification.updateMany(
+    {
+      type: { $in: COMMENT_NOTIFICATION_TYPES },
+      'metadata.commentId': id
+    },
+    {
+      $set: {
+        'metadata.commentPreview': String(preview || '').substring(0, 160)
+      }
+    }
+  );
 }
 
 async function cleanupStaleCommentNotifications(recipientId) {
@@ -324,6 +328,7 @@ async function resolveNotificationTarget(notification) {
 module.exports = {
   createNotification,
   deleteNotificationsForComments,
+  updateNotificationsForCommentPreview,
   cleanupStaleCommentNotifications,
   resolveNotificationTarget
 };
