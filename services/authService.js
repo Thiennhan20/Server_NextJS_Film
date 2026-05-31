@@ -136,30 +136,52 @@ async function sendVerificationEmail(email, name, verifyUrl, subject) {
 
 function buildPasswordResetEmailHtml(name, resetUrl) {
     return `
-      <div style="max-width:600px;margin:0 auto;padding:20px 10px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
-        <div style="background:linear-gradient(135deg,#1f2937 0%,#111827 100%);border-radius:16px;padding:24px 16px;text-align:center;box-shadow:0 10px 30px rgba(0,0,0,0.3);position:relative;overflow:hidden;">
+      <!DOCTYPE html>
+      <html xmlns="http://www.w3.org/1999/xhtml">
+      <head>
+        <meta name="color-scheme" content="light dark">
+        <meta name="supported-color-schemes" content="light dark">
+        <style>
+          :root { color-scheme: light dark; supported-color-schemes: light dark; }
+          @media (prefers-color-scheme: dark) {
+            .email-body { background-color: #1a1a2e !important; }
+            .email-card { background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%) !important; border: 1px solid #334155 !important; }
+            .email-heading { color: #f1f5f9 !important; }
+            .email-name { color: #fbbf24 !important; }
+            .email-text { color: #cbd5e1 !important; }
+            .email-subtext { color: #94a3b8 !important; }
+            .email-btn { background: #fbbf24 !important; color: #0f172a !important; }
+            .email-footer { color: #64748b !important; }
+          }
+        </style>
+      </head>
+      <body style="margin:0;padding:0;">
+      <div class="email-body" style="max-width:600px;margin:0 auto;padding:20px 10px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background-color:#f3f4f6;">
+        <div class="email-card" style="background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);border-radius:16px;padding:24px 16px;text-align:center;box-shadow:0 10px 30px rgba(0,0,0,0.15);position:relative;overflow:hidden;">
           <div style="position:relative;z-index:1;">
-            <h1 style="color:#f9fafb;margin:0 0 12px 0;font-size:22px;font-weight:700;letter-spacing:-0.5px;">
-              Hi <span style="color:#fbbf24;">${name || 'there'}</span>,
+            <h1 class="email-heading" style="color:#ffffff;margin:0 0 12px 0;font-size:22px;font-weight:700;letter-spacing:-0.5px;">
+              Hi <span class="email-name" style="color:#ffd700;text-shadow:0 0 8px rgba(255,215,0,0.6);">${name || 'there'}</span>,
             </h1>
-            <p style="color:rgba(249,250,251,0.9);font-size:14px;line-height:1.5;margin:0 0 12px 0;max-width:380px;margin-left:auto;margin-right:auto;">
+            <p class="email-text" style="color:rgba(255,255,255,0.95);font-size:14px;line-height:1.5;margin:0 0 12px 0;max-width:380px;margin-left:auto;margin-right:auto;">
               We received a request to reset the password for your Entertainment World account.
             </p>
-            <p style="color:rgba(249,250,251,0.9);font-size:14px;line-height:1.5;margin:0 0 20px 0;max-width:380px;margin-left:auto;margin-right:auto;">
+            <p class="email-text" style="color:rgba(255,255,255,0.95);font-size:14px;line-height:1.5;margin:0 0 20px 0;max-width:380px;margin-left:auto;margin-right:auto;">
               Click the button below to choose a new password. This link will expire in 10 minutes.
             </p>
-            <a href="${resetUrl}" style="display:inline-block;padding:12px 32px;background:#fbbf24;color:#111827;font-weight:700;font-size:14px;border-radius:9999px;text-decoration:none;box-shadow:0 6px 20px rgba(251,191,36,0.4);transition:all 0.2s ease;">
+            <a href="${resetUrl}" class="email-btn" style="display:inline-block;padding:12px 32px;background:#fbbf24;color:#111827;font-weight:700;font-size:14px;border-radius:9999px;text-decoration:none;box-shadow:0 6px 20px rgba(251,191,36,0.4);">
               Reset Password
             </a>
-            <p style="color:rgba(249,250,251,0.7);font-size:12px;margin:20px 0 0 0;">
+            <p class="email-subtext" style="color:rgba(255,255,255,0.75);font-size:12px;margin:20px 0 0 0;">
               If you did not request a password reset, you can safely ignore this email.
             </p>
           </div>
         </div>
-        <p style="text-align:center;color:#9ca3af;font-size:11px;margin-top:16px;line-height:1.4;">
+        <p class="email-footer" style="text-align:center;color:#6b7280;font-size:11px;margin-top:16px;line-height:1.4;">
           This email was sent by Entertainment World. For security reasons, this reset link will expire shortly.
         </p>
       </div>
+      </body>
+      </html>
     `;
 }
 
