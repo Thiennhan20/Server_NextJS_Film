@@ -239,6 +239,7 @@ function initializeWebSocket(server) {
         username: socket.username,
         avatar: socket.avatar || '',
         member_count: memberCount.length,
+        is_host: isUserHost,
       });
 
       console.log(`[WP] ${socket.username} joined ${roomId} (${joinResult.reason})`);
