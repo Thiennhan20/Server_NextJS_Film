@@ -1,7 +1,10 @@
 const Notification = require('../models/Notification');
 const Comment = require('../models/Comment');
+const User = require('../models/User');
+const axios = require('axios');
 
 const COMMENT_NOTIFICATION_TYPES = ['comment_liked', 'comment_replied'];
+const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
 
 function normalizeId(id) {
   return id ? String(id) : '';
@@ -9,6 +12,82 @@ function normalizeId(id) {
 
 function escapeRegex(value = '') {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function getPushTitle(type, actorName) {
+  switch (type) {
+    case 'comment_liked':
+      return 'Bình luận được thích ❤️';
+    case 'comment_replied':
+      return 'Phản hồi bình luận 💬';
+    case 'friend_request':
+      return 'Lời mời kết bạn 👋';
+    case 'friend_accept':
+      return 'Đồng ý kết bạn ✅';
+    default:
+      return 'Thông báo mới';
+  }
+}
+
+function getPushBody(type, actorName, metadata) {
+  switch (type) {
+    case 'comment_liked':
+      return `${actorName} đã thích bình luận của bạn.`;
+    case 'comment_replied':
+      return `${actorName} đã trả lời bình luận của bạn.`;
+    case 'friend_request':
+      return `${actorName} đã gửi lời mời kết bạn.`;
+    case 'friend_accept':
+      return `${actorName} đã đồng ý lời mời kết bạn.`;
+    default:
+      return 'Bạn có một thông báo mới.';
+  }
+}
+
+async function sendPushNotification(recipientId, serializedNotification) {
+  try {
+    const user = await User.findById(recipientId).select('pushTokens').lean();
+    if (!user || !user.pushTokens || user.pushTokens.length === 0) return;
+
+    const actorName = serializedNotification?.actor?.name || 'Ai đó';
+    const type = serializedNotification?.type || '';
+    const metadata = serializedNotification?.metadata || {};
+
+    const title = getPushTitle(type, actorName);
+    const body = getPushBody(type, actorName, metadata);
+
+    // Build messages for each registered token
+    const messages = user.pushTokens
+      .filter((token) => typeof token === 'string' && token.startsWith('ExponentPushToken'))
+      .map((token) => ({
+        to: token,
+        sound: 'default',
+        title,
+        body,
+        data: {
+          notificationId: serializedNotification?._id ? String(serializedNotification._id) : '',
+          type,
+        },
+      }));
+
+    if (messages.length === 0) return;
+
+    // Send in chunks of 100 (Expo limit)
+    for (let i = 0; i < messages.length; i += 100) {
+      const chunk = messages.slice(i, i + 100);
+      await axios.post(EXPO_PUSH_URL, chunk, {
+        headers: {
+          'Accept': 'application/json',
+          'Accept-Encoding': 'gzip, deflate',
+          'Content-Type': 'application/json',
+        },
+        timeout: 10000,
+      });
+    }
+  } catch (error) {
+    // Push notification failure should never block the main flow
+    console.error('[Push] Failed to send push notification:', error.message);
+  }
 }
 
 function pickClosestToNotification(comments, notification) {
@@ -48,6 +127,9 @@ async function createNotification({ recipientId, actorId = null, type, metadata 
   });
 
   const serialized = await serializeNotification(notification._id);
+
+  // Fire push notification in background (non-blocking)
+  sendPushNotification(recipientId, serialized).catch(() => {});
 
   return serialized;
 }

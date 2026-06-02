@@ -67,6 +67,9 @@ const userSchema = new mongoose.Schema({
   sentFriendRequests: [
     { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
   ],
+  pushTokens: [
+    { type: String, trim: true }
+  ],
   createdAt: {
     type: Date,
     default: Date.now

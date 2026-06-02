@@ -1,4 +1,5 @@
 const Notification = require('../models/Notification');
+const User = require('../models/User');
 const notificationService = require('../services/notificationService');
 
 const getNotifications = async (req, res) => {
@@ -114,10 +115,49 @@ const markAllAsRead = async (req, res) => {
   }
 };
 
+const registerPushToken = async (req, res) => {
+  try {
+    const { token } = req.body;
+    if (!token || typeof token !== 'string') {
+      return res.status(400).json({ message: 'Valid push token is required' });
+    }
+
+    // $addToSet prevents duplicates
+    await User.findByIdAndUpdate(req.user, {
+      $addToSet: { pushTokens: token.trim() }
+    });
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Register push token error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+const deregisterPushToken = async (req, res) => {
+  try {
+    const { token } = req.body;
+    if (!token || typeof token !== 'string') {
+      return res.status(400).json({ message: 'Valid push token is required' });
+    }
+
+    await User.findByIdAndUpdate(req.user, {
+      $pull: { pushTokens: token.trim() }
+    });
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Deregister push token error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
 module.exports = {
   getNotifications,
   getUnreadCount,
   getNotificationTarget,
   markAsRead,
-  markAllAsRead
+  markAllAsRead,
+  registerPushToken,
+  deregisterPushToken
 };

@@ -8,5 +8,7 @@ router.get('/unread-count', auth, notificationController.getUnreadCount);
 router.get('/:id/target', auth, notificationController.getNotificationTarget);
 router.patch('/read-all', auth, notificationController.markAllAsRead);
 router.patch('/:id/read', auth, notificationController.markAsRead);
+router.post('/register-push-token', auth, notificationController.registerPushToken);
+router.post('/deregister-push-token', auth, notificationController.deregisterPushToken);
 
 module.exports = router;
