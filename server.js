@@ -56,8 +56,8 @@ const corsOptions = {
 };
 app.use(cors(corsOptions));
 // Increase body size limit for avatar uploads (base64 images)
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ limit: '10mb', extended: true }));
+app.use(express.json({ limit: '15mb' }));
+app.use(express.urlencoded({ limit: '15mb', extended: true }));
 
 // MongoDB connection
 mongoose.connect(process.env.MONGODB_URI, {

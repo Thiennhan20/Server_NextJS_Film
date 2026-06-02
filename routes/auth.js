@@ -3,6 +3,7 @@ const router = express.Router();
 const { body } = require('express-validator');
 const auth = require('../middleware/auth');
 const optionalAuth = require('../middleware/optionalAuth');
+const avatarRateLimiter = require('../middleware/avatarRateLimiter');
 const authController = require('../controllers/authController');
 
 // Register route
@@ -44,7 +45,7 @@ router.get('/profile', auth, authController.getProfile);
 router.get('/profile/:id', optionalAuth, authController.getPublicProfile);
 
 // Update user profile (avatar, name)
-router.put('/profile', auth, authController.updateProfile);
+router.put('/profile', auth, avatarRateLimiter, authController.updateProfile);
 
 // Xác thực email
 router.get('/verify-email', authController.verifyEmail);

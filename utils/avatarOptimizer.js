@@ -11,12 +11,12 @@ const sharp = require('sharp');
 async function optimizeAvatar(imageBuffer) {
   try {
     const optimized = await sharp(imageBuffer)
-      .resize(200, 200, {
+      .resize(500, 500, {
         fit: 'cover',
         position: 'center'
       })
       .webp({
-        quality: 60, // Lower quality for smaller size
+        quality: 80, // Upgraded quality for sharp full-screen previews
         effort: 4 // Faster compression
       })
       .toBuffer();
