@@ -147,6 +147,18 @@ async function deleteNotificationsForComments(commentIds) {
   });
 }
 
+async function deleteLikeNotification(commentId, actorId) {
+  const comment = normalizeId(commentId);
+  const actor = normalizeId(actorId);
+  if (!comment || !actor) return { deletedCount: 0 };
+
+  return Notification.deleteMany({
+    type: 'comment_liked',
+    actor: actor,
+    'metadata.commentId': comment
+  });
+}
+
 async function updateNotificationsForCommentPreview(commentId, preview = '') {
   const id = normalizeId(commentId);
   if (!id) return { modifiedCount: 0 };
@@ -410,6 +422,7 @@ async function resolveNotificationTarget(notification) {
 module.exports = {
   createNotification,
   deleteNotificationsForComments,
+  deleteLikeNotification,
   updateNotificationsForCommentPreview,
   cleanupStaleCommentNotifications,
   resolveNotificationTarget

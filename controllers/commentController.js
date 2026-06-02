@@ -552,6 +552,12 @@ const toggleLike = async (req, res) => {
                     commentPreview: comment.content.substring(0, 160)
                 }
             });
+        } else if (wasLiked && !isLikedNow && !comment.userId.equals(userId)) {
+            try {
+                await notificationService.deleteLikeNotification(comment._id, userId);
+            } catch (error) {
+                console.warn('Delete like notification failed:', error.message);
+            }
         }
 
         const updatedComment = await Comment.findById(id)
