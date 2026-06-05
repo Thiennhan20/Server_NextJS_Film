@@ -117,9 +117,6 @@ const getTopComments = async (req, res) => {
                     : { likes: -1, createdAt: -1 }
             },
 
-            // Limit results
-            { $limit: limitNum },
-
             // Lookup user info
             {
                 $lookup: {
@@ -132,6 +129,9 @@ const getTopComments = async (req, res) => {
 
             // Unwind user array
             { $unwind: '$user' },
+
+            // Limit results
+            { $limit: limitNum },
 
             // Project final shape
             {
@@ -176,9 +176,6 @@ const getRecentComments = async (req, res) => {
             // Sort by creation date (newest first)
             { $sort: { createdAt: -1 } },
 
-            // Limit results
-            { $limit: limitNum },
-
             // Lookup user info
             {
                 $lookup: {
@@ -191,6 +188,9 @@ const getRecentComments = async (req, res) => {
 
             // Unwind user array
             { $unwind: '$user' },
+
+            // Limit results
+            { $limit: limitNum },
 
             // Project final shape
             {

@@ -231,6 +231,38 @@ const checkResetToken = async (req, res) => {
     }
 };
 
+// Profanity word list (Vietnamese + English)
+const BANNED_WORDS = [
+    // Vietnamese
+    'cặc', 'cac', 'lồn', 'lon', 'địt', 'dit', 'đụ', 'du', 'đéo', 'deo',
+    'đồ chó', 'thằng chó', 'con chó', 'con đĩ', 'đĩ',
+    'mẹ mày', 'má mày', 'bố mày', 'cứt',
+    'dâm', 'ngu', 'đần', 'khốn nạn', 'khốn', 'chết mẹ', 'chết cha',
+    'đồ ngu', 'thằng ngu', 'con ngu', 'vãi',
+    'đồ khốn', 'thằng khốn', 'con khốn', 'đồ điên', 'thằng điên',
+    'đồ chết', 'đồ rác', 'rác rưởi', 'súc vật', 'đồ súc vật',
+    'chó má', 'đồ phản', 'phản bội', 'lừa đảo', 'đồ lừa',
+    'dmm', 'dcm', 'vcl', 'vkl', 'vlone', 'clgt', 'cmnr', 'wtf',
+    'dm', 'đm', 'cc', 'cl', 'ml', 'cmm',
+    // English
+    'fuck', 'shit', 'bitch', 'asshole', 'bastard', 'damn',
+    'dick', 'pussy', 'cock', 'cunt', 'whore', 'slut',
+    'nigger', 'nigga', 'faggot', 'retard', 'motherfucker',
+    'bullshit', 'jackass', 'dumbass', 'piss', 'crap',
+    'stfu', 'gtfo', 'fk', 'fuk', 'fucker',
+    'bitchy', 'slutty', 'horny', 'penis', 'vagina',
+    'boob', 'porn', 'sex', 'nude', 'naked',
+];
+
+function containsProfanity(text) {
+    const normalized = text.toLowerCase().trim();
+    return BANNED_WORDS.some((word) => {
+        const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const regex = new RegExp(`(^|\\s|[^a-zA-Z\u00C0-\u1EF9])${escaped}($|\\s|[^a-zA-Z\u00C0-\u1EF9])`, 'i');
+        return regex.test(` ${normalized} `) || normalized === word;
+    });
+}
+
 // Register
 const register = async (req, res) => {
     try {
@@ -239,6 +271,16 @@ const register = async (req, res) => {
             return res.status(400).json({ errors: errors.array() });
         }
         const { name, email, password } = req.body;
+
+        // Validate name length (max 20 characters including spaces)
+        if (name && name.length > 20) {
+            return res.status(400).json({ message: 'Username must not exceed 20 characters' });
+        }
+
+        // Check for profanity in username
+        if (name && containsProfanity(name)) {
+            return res.status(400).json({ message: 'Username contains inappropriate language. Please choose a different name.' });
+        }
 
         // Check for existing email user (ONLY email auth type)
         let user = await User.findOne({
@@ -572,6 +614,16 @@ const updateProfile = async (req, res) => {
         const user = await User.findById(req.user);
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
+        }
+
+        // Validate name length (max 20 characters including spaces)
+        if (name !== undefined && name.length > 20) {
+            return res.status(400).json({ message: 'Username must not exceed 20 characters' });
+        }
+
+        // Check for profanity in username
+        if (name !== undefined && containsProfanity(name)) {
+            return res.status(400).json({ message: 'Username contains inappropriate language. Please choose a different name.' });
         }
 
         // Cập nhật thông tin

@@ -8,7 +8,7 @@ const authController = require('../controllers/authController');
 
 // Register route
 router.post('/register', [
-  body('name').notEmpty().withMessage('Please enter your name'),
+  body('name').notEmpty().withMessage('Please enter your name').isLength({ max: 20 }).withMessage('Username must not exceed 20 characters'),
   body('email').isEmail().withMessage('Please enter a valid email'),
   body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
 ], authController.register);
