@@ -40,5 +40,9 @@
   },
   "devDependencies": {
     "eslint": "^10.0.0"
+  },
+  "allowScripts": {
+    "bcrypt@6.0.0": true,
+    "sharp@0.34.5": true
   }
 }
