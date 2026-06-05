@@ -1,5 +1,4 @@
 const phimapiService = require('../services/phimapiService');
-const hlsCleanService = require('../services/hlsCleanService');
 
 // Proxy: TMDB movie lookup
 const tmdbMovieLookup = async (req, res) => {
@@ -40,8 +39,7 @@ const search = async (req, res) => {
         }
 
         const data = await phimapiService.searchPhimapi(keyword, year);
-        const requestBaseUrl = hlsCleanService.getRequestBaseUrl(req);
-        res.json(hlsCleanService.wrapPhimapiLinks(data, requestBaseUrl));
+        res.json(data);
     } catch (e) {
         if (e.response) {
             res.status(e.response.status).json(e.response.data);
@@ -56,8 +54,7 @@ const getDetail = async (req, res) => {
     try {
         const { slug } = req.params;
         const data = await phimapiService.getDetail(slug);
-        const requestBaseUrl = hlsCleanService.getRequestBaseUrl(req);
-        res.json(hlsCleanService.wrapPhimapiLinks(data, requestBaseUrl));
+        res.json(data);
     } catch (e) {
         if (e.response) {
             res.status(e.response.status).json(e.response.data);
@@ -67,27 +64,9 @@ const getDetail = async (req, res) => {
     }
 };
 
-// HLS clean playlist for server 1. This rewrites the playlist only; media segments stay on the original host.
-const hlsCleanPlaylist = async (req, res) => {
-    try {
-        const sourceUrl = req.query.source || req.query.url;
-        const requestBaseUrl = hlsCleanService.getRequestBaseUrl(req);
-        const body = await hlsCleanService.getCleanPlaylist(sourceUrl, requestBaseUrl);
-
-        res.set({
-            'Content-Type': 'application/vnd.apple.mpegurl; charset=utf-8',
-            'Cache-Control': 'no-store',
-        });
-        res.send(body);
-    } catch (e) {
-        res.status(400).json({ error: e.message || 'Failed to clean HLS playlist' });
-    }
-};
-
 module.exports = {
     tmdbMovieLookup,
     tmdbTVLookup,
     search,
-    getDetail,
-    hlsCleanPlaylist
+    getDetail
 };

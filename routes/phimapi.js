@@ -14,9 +14,6 @@ router.get('/tmdb/tv/:id', phimapiController.tmdbTVLookup);
 // GET /search?keyword=...&year=... → https://phimapi.com/v1/api/tim-kiem?keyword=...&year=...
 router.get('/search', phimapiController.search);
 
-// Clean HLS playlist for server 1.
-router.get('/hls-clean/playlist.m3u8', phimapiController.hlsCleanPlaylist);
-
 // Proxy: Movie/TV detail by slug
 // GET /detail/:slug → https://phimapi.com/phim/:slug
 router.get('/detail/:slug', phimapiController.getDetail);
