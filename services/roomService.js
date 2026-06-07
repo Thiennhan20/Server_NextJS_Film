@@ -117,10 +117,7 @@ async function createRoom({ hostId, hostName, hostAvatar, streamUrl, title, movi
   await redis.hmset(`room:${roomId}`, roomData);
   await redis.expire(`room:${roomId}`, ROOM_TTL);
 
-  // Add host to users set
-  await redis.sadd(`room:${roomId}:users`, hostId);
-  await redis.expire(`room:${roomId}:users`, ROOM_TTL);
-
+  // Host joins only after pressing Enter Room in the lobby.
   return {
     success: true,
     roomId,
@@ -191,24 +188,36 @@ async function updateRoom(roomId, fields) {
  */
 async function joinRoom(roomId, userId) {
   const roomKey = `room:${roomId}:users`;
+  const roomHashKey = `room:${roomId}`;
+  const userIdStr = String(userId);
 
   // Check if user already in room (reconnect case)
-  const isMember = await redis.sismember(roomKey, userId);
+  const isMember = await redis.sismember(roomKey, userIdStr);
   if (isMember) {
     return { success: true, reason: 'reconnect' };
   }
 
   // Check room capacity
   const count = await redis.scard(roomKey);
-  const room = await redis.hgetall(`room:${roomId}`);
+  const room = await redis.hgetall(roomHashKey);
   const maxUsers = parseInt(room?.max_users) || MAX_USERS;
+  const hostId = room?.host_id ? String(room.host_id) : '';
+  const isHost = hostId === userIdStr;
+  const hostIsMember = hostId ? await redis.sismember(roomKey, hostId) : false;
+  const capacityLimit = !isHost && hostId && !hostIsMember
+    ? Math.max(0, maxUsers - 1)
+    : maxUsers;
 
-  if (count >= maxUsers) {
+  if (count >= capacityLimit) {
     return { success: false, reason: 'Room is full' };
   }
 
   // Add user
-  await redis.sadd(roomKey, userId);
+  await redis.sadd(roomKey, userIdStr);
+  const roomTtl = await redis.ttl(roomHashKey);
+  if (roomTtl > 0) {
+    await redis.expire(roomKey, roomTtl);
+  }
   return { success: true, reason: 'joined' };
 }
 
