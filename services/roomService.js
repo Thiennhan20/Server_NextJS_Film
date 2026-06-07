@@ -44,6 +44,56 @@ function isValidStreamUrl(url) {
   }
 }
 
+function hasRoomPlayed(data) {
+  const status = data?.status || 'WAITING';
+  return data?.has_played === 'true' ||
+    status === 'PLAYING' ||
+    status === 'PAUSED' ||
+    status === 'ENDED' ||
+    (parseFloat(data?.current_pos) || 0) > 0;
+}
+
+async function normalizeEmptyRoomStatus(roomId, roomData = null, memberCount = null) {
+  const roomKey = `room:${roomId}`;
+  const data = roomData || await redis.hgetall(roomKey);
+  if (!data || Object.keys(data).length === 0) return null;
+
+  const count = memberCount !== null
+    ? memberCount
+    : await redis.scard(`room:${roomId}:users`);
+
+  if (count > 0) {
+    return {
+      status: data.status || 'WAITING',
+      hasPlayed: hasRoomPlayed(data),
+      memberCount: count,
+      changed: false,
+    };
+  }
+
+  const hasPlayed = hasRoomPlayed(data);
+  const nextStatus = hasPlayed ? 'PAUSED' : 'WAITING';
+  const updates = {};
+
+  if ((data.status || 'WAITING') !== nextStatus) {
+    updates.status = nextStatus;
+  }
+  if (hasPlayed && data.has_played !== 'true') {
+    updates.has_played = 'true';
+  }
+
+  if (Object.keys(updates).length > 0) {
+    await redis.hmset(roomKey, updates);
+  }
+
+  return {
+    status: nextStatus,
+    hasPlayed,
+    memberCount: 0,
+    changed: Object.keys(updates).length > 0,
+  };
+}
+
 // ─── Room CRUD ──────────────────────────────────────────────
 
 /**
@@ -111,6 +161,7 @@ async function createRoom({ hostId, hostName, hostAvatar, streamUrl, title, movi
     max_users: String(MAX_USERS),
     current_pos: '0',
     force_sync: 'true',
+    has_played: 'false',
   };
 
   // Create room hash
@@ -135,6 +186,7 @@ async function getRoom(roomId) {
   if (!data || Object.keys(data).length === 0) return null;
 
   const memberCount = await redis.scard(`room:${roomId}:users`);
+  const normalized = await normalizeEmptyRoomStatus(roomId, data, memberCount || 0);
 
   return {
     room_id: roomId,
@@ -142,12 +194,13 @@ async function getRoom(roomId) {
     host_name: data.host_name,
     stream_url: data.stream_url,
     title: data.title,
-    status: data.status || 'WAITING',
+    status: normalized?.status || data.status || 'WAITING',
     created_at: parseInt(data.created_at) || 0,
     max_users: parseInt(data.max_users) || MAX_USERS,
     current_pos: parseFloat(data.current_pos) || 0,
     force_sync: data.force_sync === 'true' || data.force_sync === true,
     member_count: memberCount || 0,
+    has_played: normalized?.hasPlayed || hasRoomPlayed(data),
     expires_at: (parseInt(data.created_at) || 0) + ROOM_TTL * 1000,
   };
 }
@@ -228,6 +281,7 @@ async function joinRoom(roomId, userId) {
  */
 async function leaveRoom(roomId, userId) {
   await redis.srem(`room:${roomId}:users`, userId);
+  return await normalizeEmptyRoomStatus(roomId);
 }
 
 /**
@@ -310,7 +364,11 @@ async function updatePosition(roomId, positionSec) {
  * @param {string} status - WAITING | PLAYING | PAUSED | ENDED
  */
 async function updateStatus(roomId, status) {
-  await redis.hset(`room:${roomId}`, 'status', status);
+  const updates = { status };
+  if (status === 'PLAYING' || status === 'ENDED') {
+    updates.has_played = 'true';
+  }
+  await redis.hmset(`room:${roomId}`, updates);
 }
 
 /**
@@ -348,6 +406,7 @@ async function listActiveRooms() {
       if (ttl <= 0) continue; // expired or no TTL
 
       const members = await redis.smembers(`room:${roomId}:users`);
+      const normalized = await normalizeEmptyRoomStatus(roomId, data, members ? members.length : 0);
 
       rooms.push({
         room_id: roomId,
@@ -355,7 +414,7 @@ async function listActiveRooms() {
         host_id: data.host_id,
         host_name: data.host_name || 'Host',
         host_avatar: data.host_avatar || '',
-        status: data.status || 'WAITING',
+        status: normalized?.status || data.status || 'WAITING',
         member_count: members ? members.length : 0,
         max_users: parseInt(data.max_users) || MAX_USERS,
         created_at: parseInt(data.created_at) || 0,
@@ -419,6 +478,7 @@ module.exports = {
   updateRoom,
   joinRoom,
   leaveRoom,
+  normalizeEmptyRoomStatus,
   getRoomMembers,
   isHost,
   startGracePeriod,
