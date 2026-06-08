@@ -49,7 +49,9 @@ const corsOptions = {
     'http://localhost:3000',
     'http://localhost:3001',
     'http://localhost:3002',
-    'http://localhost:3002/'
+    'http://localhost:3002/',
+    'https://ntngame.fly.dev',
+    'https://ntngame.fly.dev/'
   ],
   credentials: true,
   optionsSuccessStatus: 200,
