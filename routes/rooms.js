@@ -59,19 +59,25 @@ router.get('/', auth, async (req, res) => {
 router.get('/check-duplicate', auth, async (req, res) => {
   try {
     const userId = req.user;
-    const { movieId, audio } = req.query;
+    const { movieId, audio, season } = req.query;
 
     if (!movieId) {
       return res.status(400).json({ error: 'movieId is required.' });
     }
 
-    const duplicate = await roomService.checkDuplicateRoom(userId, String(movieId), audio ? String(audio) : '');
+    const duplicate = await roomService.checkDuplicateRoom(
+      userId,
+      String(movieId),
+      audio ? String(audio) : '',
+      season ? String(season) : ''
+    );
     if (duplicate) {
       return res.json({
         duplicate: true,
         existing_room_id: duplicate.room_id,
         title: duplicate.title,
         audio: duplicate.audio,
+        season: duplicate.season,
       });
     }
 
@@ -86,7 +92,7 @@ router.get('/check-duplicate', auth, async (req, res) => {
 
 router.post('/', auth, async (req, res) => {
   try {
-    const { title, stream_url, movie_id, audio } = req.body;
+    const { title, stream_url, movie_id, audio, content_type, season, episode, episode_playlist } = req.body;
     const userId = req.user; // From auth middleware
 
     // Validate stream URL if provided
@@ -110,6 +116,10 @@ router.post('/', auth, async (req, res) => {
       title: title || '',
       movieId: movie_id || '',
       audio: audio || '',
+      contentType: content_type || '',
+      season: season || '',
+      episode: episode || '',
+      episodePlaylist: episode_playlist || [],
     });
 
     if (!result.success) {
@@ -162,6 +172,11 @@ router.get('/:id', auth, async (req, res) => {
       expires_at: room.expires_at,
       current_pos: room.current_pos,
       host_name: room.host_name,
+      audio: room.audio,
+      content_type: room.content_type,
+      season: room.season,
+      current_episode: room.current_episode,
+      episode_playlist: room.episode_playlist || [],
     };
 
     // Only host can see stream_url via REST
@@ -225,7 +240,7 @@ router.patch('/:id/stream', auth, async (req, res) => {
   try {
     const roomId = req.params.id.toUpperCase();
     const userId = req.user;
-    const { stream_url, title } = req.body;
+    const { stream_url, title, current_episode } = req.body;
 
     // Validate stream URL
     if (!stream_url || !roomService.isValidStreamUrl(stream_url)) {
@@ -250,14 +265,16 @@ router.patch('/:id/stream', auth, async (req, res) => {
     }
 
     // Update stream in Redis
-    await roomService.updateStream(roomId, stream_url, title);
+    await roomService.updateStream(roomId, stream_url, title, { currentEpisode: current_episode });
 
     // Notify WebSocket clients
     const io = req.app.get('io');
     if (io) {
-      io.to(`room:${roomId}`).emit('CHANGE', {
+      const watchPartyNamespace = io.of ? io.of('/watch-party') : io;
+      watchPartyNamespace.to(`room:${roomId}`).emit('CHANGE', {
         stream_url,
         title: title || room.title,
+        current_episode: current_episode || room.current_episode,
       });
     }
 
@@ -265,6 +282,55 @@ router.patch('/:id/stream', auth, async (req, res) => {
   } catch (error) {
     console.error('Update stream error:', error);
     res.status(500).json({ error: 'Failed to update stream.' });
+  }
+});
+
+// ─── PATCH /api/rooms/:id/episode-playlist — Host lưu danh sách tập TV ──
+
+router.patch('/:id/episode-playlist', auth, async (req, res) => {
+  try {
+    const roomId = req.params.id.toUpperCase();
+    const userId = req.user;
+    const { content_type, season, current_episode, episode_playlist } = req.body;
+
+    const room = await roomService.getRoom(roomId);
+    if (!room) {
+      return res.status(404).json({
+        error: 'Room not found or has expired.'
+      });
+    }
+
+    if (room.host_id !== userId) {
+      return res.status(403).json({
+        error: 'Only the host can update the episode playlist.'
+      });
+    }
+
+    const sanitizedPlaylist = await roomService.updateEpisodePlaylist(roomId, {
+      contentType: content_type,
+      season,
+      currentEpisode: current_episode,
+      episodePlaylist: episode_playlist || [],
+    });
+
+    const io = req.app.get('io');
+    if (io && sanitizedPlaylist.length > 0) {
+      const watchPartyNamespace = io.of ? io.of('/watch-party') : io;
+      watchPartyNamespace.to(`room:${roomId}`).emit('EPISODE_PLAYLIST', {
+        content_type: content_type === 'tvshow' ? 'tvshow' : room.content_type,
+        season: season || room.season,
+        current_episode: current_episode || room.current_episode,
+        episode_playlist: sanitizedPlaylist,
+      });
+    }
+
+    res.json({
+      message: 'Episode playlist updated successfully.',
+      episode_count: sanitizedPlaylist.length,
+    });
+  } catch (error) {
+    console.error('Update episode playlist error:', error);
+    res.status(500).json({ error: 'Failed to update episode playlist.' });
   }
 });
 

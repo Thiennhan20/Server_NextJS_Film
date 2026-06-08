@@ -44,6 +44,92 @@ function isValidStreamUrl(url) {
   }
 }
 
+function safeDecodeUrl(value) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function normalizeStreamUrl(value) {
+  let current = sanitizeShortText(value, 2000).replace(/&amp;/g, '&');
+  if (!current) return '';
+
+  for (let index = 0; index < 2; index += 1) {
+    const decoded = safeDecodeUrl(current).trim().replace(/&amp;/g, '&');
+    if (/^https?:\/\//i.test(decoded)) {
+      current = decoded;
+    }
+
+    try {
+      const parsed = new URL(current);
+      const wrappedUrl = parsed.searchParams.get('url') || parsed.searchParams.get('source');
+      const decodedWrappedUrl = wrappedUrl ? safeDecodeUrl(wrappedUrl).trim().replace(/&amp;/g, '&') : '';
+
+      if (decodedWrappedUrl && /^https?:\/\//i.test(decodedWrappedUrl)) {
+        current = decodedWrappedUrl;
+        continue;
+      }
+
+      parsed.hash = '';
+      return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.toString() : '';
+    } catch {
+      return '';
+    }
+  }
+
+  return isValidStreamUrl(current) ? current : '';
+}
+
+function sanitizeShortText(value, maxLength = 200) {
+  if (value === undefined || value === null) return '';
+  return String(value).trim().slice(0, maxLength);
+}
+
+function sanitizeEpisodePlaylist(playlist) {
+  if (!Array.isArray(playlist)) return [];
+
+  return playlist
+    .slice(0, 120)
+    .map((item) => {
+      const episodeNumber = Number(item?.episode_number);
+      if (!Number.isFinite(episodeNumber) || episodeNumber <= 0) return null;
+
+      const vietsub = normalizeStreamUrl(item?.vietsub);
+      const dubbed = normalizeStreamUrl(item?.dubbed);
+      const m3u8 = normalizeStreamUrl(item?.m3u8);
+
+      const episode = {
+        id: item?.id !== undefined && item?.id !== null ? String(item.id).slice(0, 64) : '',
+        name: sanitizeShortText(item?.name || item?.title, 200),
+        episode_number: episodeNumber,
+        season_number: Number.isFinite(Number(item?.season_number)) ? Number(item.season_number) : null,
+        still_path: sanitizeShortText(item?.still_path, 300),
+        air_date: sanitizeShortText(item?.air_date, 40),
+        vietsub,
+        dubbed,
+        m3u8,
+      };
+
+      return episode;
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.episode_number - b.episode_number);
+}
+
+function parseEpisodePlaylist(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return sanitizeEpisodePlaylist(value);
+  if (typeof value !== 'string') return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? sanitizeEpisodePlaylist(parsed) : [];
+  } catch {
+    return [];
+  }
+}
+
 function hasRoomPlayed(data) {
   const status = data?.status || 'WAITING';
   return data?.has_played === 'true' ||
@@ -106,7 +192,7 @@ async function normalizeEmptyRoomStatus(roomId, roomData = null, memberCount = n
  * @param {string} params.title - Movie/show title
  * @returns {{ success: boolean, roomId?: string, error?: string }}
  */
-async function createRoom({ hostId, hostName, hostAvatar, streamUrl, title, movieId, audio }) {
+async function createRoom({ hostId, hostName, hostAvatar, streamUrl, title, movieId, audio, contentType, season, episode, episodePlaylist }) {
   // Check capacity limit
   const activeCount = await countActiveRooms();
   if (activeCount >= MAX_CONCURRENT_ROOMS) {
@@ -121,7 +207,7 @@ async function createRoom({ hostId, hostName, hostAvatar, streamUrl, title, movi
 
   // Check duplicate: same user + same movieId + same audio (even if audio is empty)
   if (movieId) {
-    const duplicate = await checkDuplicateRoom(hostId, movieId, audio || '');
+    const duplicate = await checkDuplicateRoom(hostId, movieId, audio || '', season || '');
     if (duplicate) {
       return {
         success: false,
@@ -148,6 +234,10 @@ async function createRoom({ hostId, hostName, hostAvatar, streamUrl, title, movi
   }
 
   const now = Date.now();
+  const sanitizedContentType = contentType === 'tvshow' ? 'tvshow' : contentType === 'movie' ? 'movie' : '';
+  const sanitizedSeason = Number.isFinite(Number(season)) && Number(season) > 0 ? String(Number(season)) : '';
+  const sanitizedEpisode = Number.isFinite(Number(episode)) && Number(episode) > 0 ? String(Number(episode)) : '';
+  const sanitizedPlaylist = sanitizeEpisodePlaylist(episodePlaylist);
   const roomData = {
     host_id: hostId,
     host_name: hostName,
@@ -156,6 +246,10 @@ async function createRoom({ hostId, hostName, hostAvatar, streamUrl, title, movi
     title: title || '',
     movie_id: movieId || '',
     audio: audio || '',
+    content_type: sanitizedContentType,
+    season: sanitizedSeason,
+    current_episode: sanitizedEpisode,
+    episode_playlist: JSON.stringify(sanitizedPlaylist),
     status: 'WAITING',
     created_at: String(now),
     max_users: String(MAX_USERS),
@@ -194,6 +288,11 @@ async function getRoom(roomId) {
     host_name: data.host_name,
     stream_url: data.stream_url,
     title: data.title,
+    audio: data.audio || '',
+    content_type: data.content_type || '',
+    season: data.season ? parseInt(data.season) || null : null,
+    current_episode: data.current_episode ? parseInt(data.current_episode) || null : null,
+    episode_playlist: parseEpisodePlaylist(data.episode_playlist),
     status: normalized?.status || data.status || 'WAITING',
     created_at: parseInt(data.created_at) || 0,
     max_users: parseInt(data.max_users) || MAX_USERS,
@@ -343,10 +442,48 @@ async function isInGracePeriod(roomId, userId) {
  * @param {string} streamUrl
  * @param {string} title
  */
-async function updateStream(roomId, streamUrl, title) {
-  const fields = { stream_url: streamUrl };
+async function updateStream(roomId, streamUrl, title, metadata = {}) {
+  const fields = {
+    stream_url: streamUrl,
+    current_pos: '0',
+    status: 'WAITING',
+    has_played: 'false',
+  };
   if (title) fields.title = title;
+  if (Number.isFinite(Number(metadata.currentEpisode)) && Number(metadata.currentEpisode) > 0) {
+    fields.current_episode = String(Number(metadata.currentEpisode));
+  }
   await updateRoom(roomId, fields);
+}
+
+/**
+ * Update TV episode playlist metadata for a room.
+ * @param {string} roomId
+ * @param {Object} metadata
+ */
+async function updateEpisodePlaylist(roomId, metadata = {}) {
+  const fields = {};
+  const sanitizedPlaylist = sanitizeEpisodePlaylist(metadata.episodePlaylist);
+
+  if (metadata.contentType === 'tvshow') {
+    fields.content_type = 'tvshow';
+  }
+  if (Number.isFinite(Number(metadata.season)) && Number(metadata.season) > 0) {
+    fields.season = String(Number(metadata.season));
+  }
+  if (Number.isFinite(Number(metadata.currentEpisode)) && Number(metadata.currentEpisode) > 0) {
+    fields.current_episode = String(Number(metadata.currentEpisode));
+  }
+  if (sanitizedPlaylist.length > 0) {
+    fields.episode_playlist = JSON.stringify(sanitizedPlaylist);
+  }
+
+  if (Object.keys(fields).length === 0) {
+    return [];
+  }
+
+  await updateRoom(roomId, fields);
+  return sanitizedPlaylist;
 }
 
 /**
@@ -414,6 +551,9 @@ async function listActiveRooms() {
         host_id: data.host_id,
         host_name: data.host_name || 'Host',
         host_avatar: data.host_avatar || '',
+        content_type: data.content_type || '',
+        season: data.season ? parseInt(data.season) || null : null,
+        current_episode: data.current_episode ? parseInt(data.current_episode) || null : null,
         status: normalized?.status || data.status || 'WAITING',
         member_count: members ? members.length : 0,
         max_users: parseInt(data.max_users) || MAX_USERS,
@@ -438,7 +578,7 @@ async function listActiveRooms() {
  * @param {string} audio - 'vietsub' | 'dubbed' | ''
  * @returns {Object|null} existing room or null
  */
-async function checkDuplicateRoom(hostId, movieId, audio) {
+async function checkDuplicateRoom(hostId, movieId, audio, season = '') {
   try {
     const allKeys = await redis.keys('room:ROOM-*');
     const roomKeys = allKeys.filter(k => !k.includes(':users') && !k.includes(':grace'));
@@ -446,6 +586,7 @@ async function checkDuplicateRoom(hostId, movieId, audio) {
     const hostIdStr = String(hostId);
     const movieIdStr = String(movieId);
     const audioStr = String(audio || '');
+    const seasonStr = String(season || '');
 
     for (const key of roomKeys) {
       const data = await redis.hgetall(key);
@@ -454,13 +595,15 @@ async function checkDuplicateRoom(hostId, movieId, audio) {
       if (
         String(data.host_id) === hostIdStr &&
         String(data.movie_id) === movieIdStr &&
-        String(data.audio || '') === audioStr
+        String(data.audio || '') === audioStr &&
+        String(data.season || '') === seasonStr
       ) {
         const roomId = key.replace('room:', '');
         return {
           room_id: roomId,
           title: data.title || '',
           audio: data.audio || '',
+          season: data.season || '',
         };
       }
     }
@@ -485,6 +628,7 @@ module.exports = {
   endGracePeriod,
   isInGracePeriod,
   updateStream,
+  updateEpisodePlaylist,
   updatePosition,
   updateStatus,
   listActiveRooms,

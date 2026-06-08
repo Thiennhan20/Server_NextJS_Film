@@ -226,6 +226,11 @@ function initializeWebSocket(server) {
         host_name: room.host_name,
         is_host: isUserHost,
         members: membersList,
+        audio: room.audio || '',
+        content_type: room.content_type || '',
+        season: room.season || null,
+        current_episode: room.current_episode || null,
+        episode_playlist: room.episode_playlist || [],
       };
 
       // Host gets stream_url, viewer gets it via WebSocket (needed for HLS.js)
@@ -305,7 +310,7 @@ function initializeWebSocket(server) {
 
     // ─── HOST-ONLY: CHANGE (stream URL) ─────────────────────
 
-    socket.on('CHANGE', async ({ stream_url, title }) => {
+    socket.on('CHANGE', async ({ stream_url, title, current_episode }) => {
       if (!currentRoomId) return;
       if (!await roomService.isHost(currentRoomId, socket.userId)) return;
 
@@ -316,11 +321,12 @@ function initializeWebSocket(server) {
         return;
       }
 
-      await roomService.updateStream(currentRoomId, stream_url, title);
+      await roomService.updateStream(currentRoomId, stream_url, title, { currentEpisode: current_episode });
 
       wpNamespace.to(`room:${currentRoomId}`).emit('CHANGE', {
         stream_url,
         title: title || '',
+        current_episode: current_episode || null,
       });
     });
 
