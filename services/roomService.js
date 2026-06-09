@@ -288,6 +288,7 @@ async function getRoom(roomId) {
     host_name: data.host_name,
     stream_url: data.stream_url,
     title: data.title,
+    movie_id: data.movie_id || '',
     audio: data.audio || '',
     content_type: data.content_type || '',
     season: data.season ? parseInt(data.season) || null : null,

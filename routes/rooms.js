@@ -11,6 +11,7 @@ const express = require('express');
 const router = express.Router();
 const auth = require('../middleware/auth');
 const roomService = require('../services/roomService');
+const streamHistoryService = require('../services/streamHistoryService');
 
 // ─── GET /api/rooms/public — Public listing (no auth required) ──
 router.get('/public', async (req, res) => {
@@ -88,11 +89,35 @@ router.get('/check-duplicate', auth, async (req, res) => {
   }
 });
 
+router.get('/history', auth, async (req, res) => {
+  try {
+    const limit = req.query.limit ? Number(req.query.limit) : 20;
+    const items = await streamHistoryService.listUserStreams(req.user, limit);
+    res.json({ items });
+  } catch (error) {
+    console.error('List stream history error:', error);
+    res.status(500).json({ error: 'Failed to list stream history.' });
+  }
+});
+
+router.delete('/history/:historyId', auth, async (req, res) => {
+  try {
+    const deleted = await streamHistoryService.deleteUserStream(req.user, req.params.historyId);
+    if (!deleted) {
+      return res.status(404).json({ error: 'Saved stream not found.' });
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('Delete stream history error:', error);
+    res.status(500).json({ error: 'Failed to delete saved stream.' });
+  }
+});
+
 // ─── POST /api/rooms — Tạo phòng mới ───────────────────────
 
 router.post('/', auth, async (req, res) => {
   try {
-    const { title, stream_url, movie_id, audio, content_type, season, episode, episode_playlist } = req.body;
+    const { title, stream_url, movie_id, audio, content_type, season, episode, episode_playlist, poster } = req.body;
     const userId = req.user; // From auth middleware
 
     // Validate stream URL if provided
@@ -133,6 +158,24 @@ router.post('/', auth, async (req, res) => {
         max_rooms: result.maxRooms,
         existing_room_id: result.existingRoomId,
       });
+    }
+
+    try {
+      await streamHistoryService.recordCreatedStream({
+        hostId: userId,
+        roomId: result.roomId,
+        title: title || '',
+        streamUrl: stream_url || '',
+        movieId: movie_id || '',
+        audio: audio || '',
+        contentType: content_type || '',
+        season,
+        episode,
+        episodePlaylist: episode_playlist || [],
+        poster: poster || '',
+      });
+    } catch (historyError) {
+      console.error('Record stream history error:', historyError);
     }
 
     res.status(201).json({
@@ -267,6 +310,23 @@ router.patch('/:id/stream', auth, async (req, res) => {
     // Update stream in Redis
     await roomService.updateStream(roomId, stream_url, title, { currentEpisode: current_episode });
 
+    try {
+      await streamHistoryService.recordCreatedStream({
+        hostId: userId,
+        roomId,
+        title: title || room.title,
+        streamUrl: stream_url,
+        movieId: room.movie_id || '',
+        audio: room.audio || '',
+        contentType: room.content_type || '',
+        season: room.season,
+        episode: current_episode || room.current_episode,
+        episodePlaylist: room.episode_playlist || [],
+      });
+    } catch (historyError) {
+      console.error('Record stream history error:', historyError);
+    }
+
     // Notify WebSocket clients
     const io = req.app.get('io');
     if (io) {
@@ -313,6 +373,17 @@ router.patch('/:id/episode-playlist', auth, async (req, res) => {
       episodePlaylist: episode_playlist || [],
     });
 
+    try {
+      await streamHistoryService.updateStreamHistoryMetadata({
+        userId,
+        streamUrl: room.stream_url,
+        season: season || room.season,
+        episode: current_episode || room.current_episode,
+        episodePlaylist: sanitizedPlaylist,
+      });
+    } catch (historyError) {
+      // Silent check
+    }
     const io = req.app.get('io');
     if (io && sanitizedPlaylist.length > 0) {
       const watchPartyNamespace = io.of ? io.of('/watch-party') : io;

@@ -8,6 +8,7 @@
 const { Server } = require('socket.io');
 const jwt = require('jsonwebtoken');
 const roomService = require('./services/roomService');
+const streamHistoryService = require('./services/streamHistoryService');
 
 const GRACE_PERIOD_MS = 30000;   // 30 seconds
 const HEARTBEAT_TIMEOUT_MS = 45000; // 45 seconds (3 missed heartbeats)
@@ -314,6 +315,9 @@ function initializeWebSocket(server) {
       if (!currentRoomId) return;
       if (!await roomService.isHost(currentRoomId, socket.userId)) return;
 
+      const room = await roomService.getRoom(currentRoomId);
+      if (!room) return;
+
       if (stream_url && !roomService.isValidStreamUrl(stream_url)) {
         socket.emit('ERROR', {
           message: 'Invalid stream URL. Please provide a valid .m3u8 link.'
@@ -322,6 +326,23 @@ function initializeWebSocket(server) {
       }
 
       await roomService.updateStream(currentRoomId, stream_url, title, { currentEpisode: current_episode });
+
+      try {
+        await streamHistoryService.recordCreatedStream({
+          hostId: socket.userId,
+          roomId: currentRoomId,
+          title: title || room.title,
+          streamUrl: stream_url,
+          movieId: room.movie_id || '',
+          audio: room.audio || '',
+          contentType: room.content_type || '',
+          season: room.season,
+          episode: current_episode || room.current_episode,
+          episodePlaylist: room.episode_playlist || [],
+        });
+      } catch (historyError) {
+        console.error('[WP] Record stream history error:', historyError);
+      }
 
       wpNamespace.to(`room:${currentRoomId}`).emit('CHANGE', {
         stream_url,
