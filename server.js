@@ -46,6 +46,8 @@ const corsOptions = {
     process.env.CLIENT_URL || 'http://localhost:3000',
     'https://moviesaw.vercel.app',
     'https://moviesaw.vercel.app/',
+    'https://enterntn.duckdns.org',
+    'https://enterntn.duckdns.org/',
     'http://localhost:3000',
     'http://localhost:3001',
     'http://localhost:3002',

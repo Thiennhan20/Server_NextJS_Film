@@ -25,7 +25,7 @@ const roomConnections = new Map();
 function initializeWebSocket(server) {
   const io = new Server(server, {
     cors: {
-      origin: ["https://moviesaw.vercel.app", "http://localhost:3000"],
+      origin: ["https://moviesaw.vercel.app", "http://localhost:3000", "https://enterntn.duckdns.org"],
       methods: ["GET", "POST"],
       credentials: true
     }
