@@ -40,9 +40,13 @@ async function downloadAndOptimizeAvatar(avatarUrl) {
     }
 }
 
-function createToken(userId) {
+function createToken(userId, sessionId = null) {
+    const payload = { userId };
+    if (sessionId) {
+        payload.sessionId = sessionId;
+    }
     return jwt.sign(
-        { userId },
+        payload,
         process.env.JWT_SECRET,
         { expiresIn: '15m' } // 15 minutes Access Token
     );

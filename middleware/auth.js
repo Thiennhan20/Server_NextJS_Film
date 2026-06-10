@@ -21,6 +21,16 @@ const auth = async (req, res, next) => {
 
     // Verify token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    // Check if session is active
+    if (decoded.sessionId) {
+      const Session = require('../models/Session');
+      const sessionExists = await Session.exists({ _id: decoded.sessionId });
+      if (!sessionExists) {
+        return res.status(401).json({ message: 'Session has been revoked', code: 'SESSION_REVOKED' });
+      }
+    }
+
     const User = require('../models/User');
     const user = await User.findById(decoded.userId);
     

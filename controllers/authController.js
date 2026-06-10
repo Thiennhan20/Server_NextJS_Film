@@ -28,8 +28,10 @@ const rateLimitMiddleware = (req, res, next) => {
 };
 
 const createSessionAndSendResponse = async (user, res, statusCode = 200, req) => {
+    const sessionId = new (require('mongoose').Types.ObjectId)();
+
     // Create JWT token
-    const token = authService.createToken(user._id);
+    const token = authService.createToken(user._id, sessionId);
 
     // Set HttpOnly access token cookie (15 mins)
     res.cookie('token', token, {
@@ -46,6 +48,7 @@ const createSessionAndSendResponse = async (user, res, statusCode = 200, req) =>
     const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days
 
     await Session.create({
+        _id: sessionId,
         userId: user._id,
         refreshToken,
         userAgent,
@@ -623,7 +626,7 @@ const refreshToken = async (req, res) => {
             return res.status(401).json({ message: 'Session expired' });
         }
 
-        const token = authService.createToken(session.userId);
+        const token = authService.createToken(session.userId, session._id);
 
         res.cookie('token', token, {
             httpOnly: true,
