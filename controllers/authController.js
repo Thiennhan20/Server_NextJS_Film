@@ -3,6 +3,7 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const WatchProgress = require('../models/WatchProgress');
 const BlacklistedToken = require('../models/BlacklistedToken');
+const Session = require('../models/Session');
 const { optimizeAvatar, base64ToBuffer, validateImage } = require('../utils/avatarOptimizer');
 const authService = require('../services/authService');
 const PasswordResetToken = require('../models/PasswordResetToken');
@@ -24,6 +25,51 @@ const rateLimitMiddleware = (req, res, next) => {
         .catch(() => {
             res.status(429).json({ message: 'Too many requests. Please try again later.' });
         });
+};
+
+const createSessionAndSendResponse = async (user, res, statusCode = 200, req) => {
+    const sessionId = new (require('mongoose').Types.ObjectId)();
+
+    // Create JWT token
+    const token = authService.createToken(user._id, sessionId);
+
+    // Set HttpOnly access token cookie (15 mins)
+    res.cookie('token', token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 15 * 60 * 1000 // 15 mins
+    });
+
+    const refreshToken = crypto.randomBytes(40).toString('hex');
+    const userAgent = req.headers['user-agent'] || '';
+    const device = authService.parseUserAgent(userAgent);
+    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || req.ip || '';
+    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days
+
+    await Session.create({
+        _id: sessionId,
+        userId: user._id,
+        refreshToken,
+        userAgent,
+        device,
+        ip,
+        expiresAt
+    });
+
+    // Set HttpOnly refresh token cookie (30 days)
+    res.cookie('refreshToken', refreshToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        path: '/api/auth',
+        maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
+    });
+
+    return res.status(statusCode).json({
+        token,
+        user: authService.formatUserResponse(user)
+    });
 };
 
 // ======= Forgot password / Reset password =======
@@ -381,13 +427,8 @@ const login = async (req, res) => {
         if (!isMatch) {
             return res.status(400).json({ message: 'Invalid credentials' });
         }
-        // Create JWT token
-        const token = authService.createToken(user._id);
-
-        res.json({
-            token,
-            user: authService.formatUserResponse(user)
-        });
+        
+        await createSessionAndSendResponse(user, res, 200, req);
     } catch (err) {
         res.status(500).json({ message: 'Server error' });
     }
@@ -482,11 +523,7 @@ const googleLogin = async (req, res) => {
             }
             await user.save();
 
-            const token = authService.createToken(user._id);
-            return res.json({
-                token,
-                user: authService.formatUserResponse(user)
-            });
+            return createSessionAndSendResponse(user, res, 200, req);
         }
 
         // Google user doesn't exist - REGISTER (create new)
@@ -508,11 +545,7 @@ const googleLogin = async (req, res) => {
             { upsert: true, new: true, setDefaultsOnInsert: true }
         );
 
-        const token = authService.createToken(user._id);
-        return res.status(201).json({
-            token,
-            user: authService.formatUserResponse(user)
-        });
+        return createSessionAndSendResponse(user, res, 201, req);
     } catch {
         res.status(500).json({ message: 'Server error' });
     }
@@ -538,8 +571,148 @@ const logout = async (req, res) => {
 
         await blacklistedToken.save();
 
+        // Delete database session matching refreshToken
+        const refreshToken = req.cookies?.refreshToken;
+        if (refreshToken) {
+            await Session.deleteOne({ refreshToken });
+        }
+
+        // Clear HttpOnly cookies
+        res.clearCookie('token', {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'lax'
+        });
+
+        res.clearCookie('refreshToken', {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'lax',
+            path: '/api/auth'
+        });
+
         res.json({ message: 'Logged out successfully' });
     } catch (error) {
+        res.status(500).json({ message: 'Server error' });
+    }
+};
+
+const refreshToken = async (req, res) => {
+    try {
+        const oldRefreshToken = req.cookies?.refreshToken || req.body?.refreshToken;
+        if (!oldRefreshToken) {
+            return res.status(401).json({ message: 'Refresh token missing' });
+        }
+
+        const session = await Session.findOne({ refreshToken: oldRefreshToken });
+        if (!session) {
+            res.clearCookie('refreshToken', {
+                httpOnly: true,
+                secure: process.env.NODE_ENV === 'production',
+                sameSite: 'lax',
+                path: '/api/auth'
+            });
+            return res.status(401).json({ message: 'Session not found' });
+        }
+
+        if (session.expiresAt && session.expiresAt < new Date()) {
+            await Session.deleteOne({ _id: session._id });
+            res.clearCookie('refreshToken', {
+                httpOnly: true,
+                secure: process.env.NODE_ENV === 'production',
+                sameSite: 'lax',
+                path: '/api/auth'
+            });
+            return res.status(401).json({ message: 'Session expired' });
+        }
+
+        const token = authService.createToken(session.userId, session._id);
+
+        res.cookie('token', token, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'lax',
+            maxAge: 15 * 60 * 1000 // 15 mins
+        });
+
+        const newRefreshToken = crypto.randomBytes(40).toString('hex');
+        
+        session.refreshToken = newRefreshToken;
+        session.lastActive = new Date();
+        session.expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days
+        await session.save();
+
+        res.cookie('refreshToken', newRefreshToken, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'lax',
+            path: '/api/auth',
+            maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
+        });
+
+        res.json({ token });
+    } catch (err) {
+        console.error('Error refreshing token:', err);
+        res.status(500).json({ message: 'Server error' });
+    }
+};
+
+const getSessions = async (req, res) => {
+    try {
+        const userId = req.user;
+        const currentRefreshToken = req.cookies?.refreshToken;
+        
+        const sessions = await Session.find({ userId }).sort({ lastActive: -1 });
+        
+        const mappedSessions = sessions.map(session => ({
+            _id: session._id,
+            device: session.device,
+            ip: session.ip,
+            lastActive: session.lastActive,
+            isCurrent: session.refreshToken === currentRefreshToken
+        }));
+        
+        res.json(mappedSessions);
+    } catch (err) {
+        console.error('Error getting sessions:', err);
+        res.status(500).json({ message: 'Server error' });
+    }
+};
+
+const revokeSession = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const userId = req.user;
+        
+        const deletedSession = await Session.findOneAndDelete({ _id: id, userId });
+        if (!deletedSession) {
+            return res.status(404).json({ message: 'Session not found' });
+        }
+        
+        res.json({ message: 'Session revoked successfully' });
+    } catch (err) {
+        console.error('Error revoking session:', err);
+        res.status(500).json({ message: 'Server error' });
+    }
+};
+
+const revokeAllOtherSessions = async (req, res) => {
+    try {
+        const userId = req.user;
+        const currentRefreshToken = req.cookies?.refreshToken;
+        
+        if (!currentRefreshToken) {
+            return res.status(400).json({ message: 'Current session identifier missing' });
+        }
+        
+        await Session.deleteMany({
+            userId,
+            refreshToken: { $ne: currentRefreshToken }
+        });
+        
+        res.json({ message: 'All other sessions revoked successfully' });
+    } catch (err) {
+        console.error('Error revoking all other sessions:', err);
         res.status(500).json({ message: 'Server error' });
     }
 };
@@ -554,7 +727,8 @@ const getProfile = async (req, res) => {
         }
 
         res.json({
-            user: authService.formatUserResponse(user)
+            user: authService.formatUserResponse(user),
+            token: req.token
         });
     } catch {
         res.status(500).json({ message: 'Server error' });
@@ -1067,6 +1241,10 @@ module.exports = {
     googleMobileCallback,
 
     logout,
+    refreshToken,
+    getSessions,
+    revokeSession,
+    revokeAllOtherSessions,
     getProfile,
     getPublicProfile,
     updateProfile,

@@ -38,6 +38,14 @@ router.get('/google/mobile-callback', authController.googleMobileCallback);
 // Logout route
 router.post('/logout', auth, authController.logout);
 
+// Refresh token route (cookie-based, doesn't require standard auth header middleware)
+router.post('/refresh', authController.refreshToken);
+
+// Session management routes
+router.get('/sessions', auth, authController.getSessions);
+router.delete('/sessions/:id', auth, authController.revokeSession);
+router.delete('/sessions', auth, authController.revokeAllOtherSessions);
+
 // Protected route - Get profile
 router.get('/profile', auth, authController.getProfile);
 

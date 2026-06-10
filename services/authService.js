@@ -40,12 +40,36 @@ async function downloadAndOptimizeAvatar(avatarUrl) {
     }
 }
 
-function createToken(userId) {
+function createToken(userId, sessionId = null) {
+    const payload = { userId };
+    if (sessionId) {
+        payload.sessionId = sessionId;
+    }
     return jwt.sign(
-        { userId },
+        payload,
         process.env.JWT_SECRET,
-        { expiresIn: '7d' }
+        { expiresIn: '15m' } // 15 minutes Access Token
     );
+}
+
+function parseUserAgent(uaString) {
+    if (!uaString) return 'Unknown Device';
+
+    let os = 'Unknown OS';
+    if (/windows/i.test(uaString)) os = 'Windows';
+    else if (/macintosh|mac os x/i.test(uaString) && !/like mac os x/i.test(uaString)) os = 'macOS';
+    else if (/iphone|ipad|ipod/i.test(uaString)) os = 'iOS';
+    else if (/android/i.test(uaString)) os = 'Android';
+    else if (/linux/i.test(uaString)) os = 'Linux';
+
+    let browser = 'Unknown Browser';
+    if (/edg/i.test(uaString)) browser = 'Edge';
+    else if (/chrome|crios/i.test(uaString)) browser = 'Chrome';
+    else if (/firefox|fxios/i.test(uaString)) browser = 'Firefox';
+    else if (/safari/i.test(uaString) && !/chrome|crios|android/i.test(uaString)) browser = 'Safari';
+    else if (/opr/i.test(uaString)) browser = 'Opera';
+
+    return `${browser} on ${os}`;
 }
 
 function formatUserResponse(user) {
@@ -209,4 +233,5 @@ module.exports = {
     rateLimiter,
     buildPasswordResetEmailHtml,
     sendPasswordResetEmail,
+    parseUserAgent,
 };

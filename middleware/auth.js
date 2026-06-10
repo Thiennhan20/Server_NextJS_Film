@@ -3,13 +3,15 @@ const BlacklistedToken = require('../models/BlacklistedToken');
 
 const auth = async (req, res, next) => {
   try {
-    // Chỉ đọc token từ Authorization header
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ message: 'No authentication token found' });
-    }
+    let token = req.cookies?.token;
     
-    const token = authHeader.substring(7); // Bỏ 'Bearer ' prefix
+    if (!token) {
+      const authHeader = req.headers.authorization;
+      if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ message: 'No authentication token found' });
+      }
+      token = authHeader.substring(7); // Bỏ 'Bearer ' prefix
+    }
 
     // Check if token exists in blacklist
     const isBlacklisted = await BlacklistedToken.findOne({ token });
@@ -19,6 +21,16 @@ const auth = async (req, res, next) => {
 
     // Verify token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    // Check if session is active
+    if (decoded.sessionId) {
+      const Session = require('../models/Session');
+      const sessionExists = await Session.exists({ _id: decoded.sessionId });
+      if (!sessionExists) {
+        return res.status(401).json({ message: 'Session has been revoked', code: 'SESSION_REVOKED' });
+      }
+    }
+
     const User = require('../models/User');
     const user = await User.findById(decoded.userId);
     
@@ -37,6 +49,9 @@ const auth = async (req, res, next) => {
     next();
   } catch (error) {
     console.error('Auth middleware error:', error);
+    if (error.name === 'TokenExpiredError') {
+      return res.status(401).json({ message: 'Token expired', code: 'TOKEN_EXPIRED' });
+    }
     res.status(401).json({ message: 'Please authenticate' });
   }
 };
