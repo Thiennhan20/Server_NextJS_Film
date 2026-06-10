@@ -3,13 +3,15 @@ const BlacklistedToken = require('../models/BlacklistedToken');
 
 const auth = async (req, res, next) => {
   try {
-    // Chỉ đọc token từ Authorization header
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ message: 'No authentication token found' });
-    }
+    let token = req.cookies?.token;
     
-    const token = authHeader.substring(7); // Bỏ 'Bearer ' prefix
+    if (!token) {
+      const authHeader = req.headers.authorization;
+      if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ message: 'No authentication token found' });
+      }
+      token = authHeader.substring(7); // Bỏ 'Bearer ' prefix
+    }
 
     // Check if token exists in blacklist
     const isBlacklisted = await BlacklistedToken.findOne({ token });

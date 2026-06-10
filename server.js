@@ -1,6 +1,7 @@
 const express = require('express');
 const http = require('http');
 const cors = require('cors');
+const cookieParser = require('cookie-parser');
 const helmet = require('helmet');
 const compression = require('compression');
 const mongoose = require('mongoose');
@@ -39,6 +40,7 @@ app.disable('x-powered-by');
 
 // Enable response compression
 app.use(compression());
+app.use(cookieParser());
 
 // CORS configuration
 const corsOptions = {

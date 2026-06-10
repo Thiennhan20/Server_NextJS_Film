@@ -2,10 +2,16 @@ const jwt = require('jsonwebtoken');
 
 const optionalAuth = async (req, res, next) => {
   try {
-    const authHeader = req.headers.authorization;
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      const token = authHeader.substring(7);
-      
+    let token = req.cookies?.token;
+    
+    if (!token) {
+      const authHeader = req.headers.authorization;
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.substring(7);
+      }
+    }
+    
+    if (token) {
       const BlacklistedToken = require('../models/BlacklistedToken');
       const isBlacklisted = await BlacklistedToken.findOne({ token });
       

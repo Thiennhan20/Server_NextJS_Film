@@ -384,6 +384,14 @@ const login = async (req, res) => {
         // Create JWT token
         const token = authService.createToken(user._id);
 
+        // Set HttpOnly cookie
+        res.cookie('token', token, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'lax',
+            maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+        });
+
         res.json({
             token,
             user: authService.formatUserResponse(user)
@@ -483,6 +491,15 @@ const googleLogin = async (req, res) => {
             await user.save();
 
             const token = authService.createToken(user._id);
+
+            // Set HttpOnly cookie
+            res.cookie('token', token, {
+                httpOnly: true,
+                secure: process.env.NODE_ENV === 'production',
+                sameSite: 'lax',
+                maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+            });
+
             return res.json({
                 token,
                 user: authService.formatUserResponse(user)
@@ -509,6 +526,15 @@ const googleLogin = async (req, res) => {
         );
 
         const token = authService.createToken(user._id);
+
+        // Set HttpOnly cookie
+        res.cookie('token', token, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'lax',
+            maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+        });
+
         return res.status(201).json({
             token,
             user: authService.formatUserResponse(user)
@@ -538,6 +564,13 @@ const logout = async (req, res) => {
 
         await blacklistedToken.save();
 
+        // Clear HttpOnly cookie
+        res.clearCookie('token', {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'lax'
+        });
+
         res.json({ message: 'Logged out successfully' });
     } catch (error) {
         res.status(500).json({ message: 'Server error' });
@@ -554,7 +587,8 @@ const getProfile = async (req, res) => {
         }
 
         res.json({
-            user: authService.formatUserResponse(user)
+            user: authService.formatUserResponse(user),
+            token: req.token
         });
     } catch {
         res.status(500).json({ message: 'Server error' });
