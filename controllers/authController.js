@@ -59,7 +59,7 @@ const createSessionAndSendResponse = async (user, res, statusCode = 200, req) =>
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'lax',
-        path: '/api/auth/refresh',
+        path: '/api/auth',
         maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
     });
 
@@ -585,7 +585,7 @@ const logout = async (req, res) => {
             httpOnly: true,
             secure: process.env.NODE_ENV === 'production',
             sameSite: 'lax',
-            path: '/api/auth/refresh'
+            path: '/api/auth'
         });
 
         res.json({ message: 'Logged out successfully' });
@@ -607,7 +607,7 @@ const refreshToken = async (req, res) => {
                 httpOnly: true,
                 secure: process.env.NODE_ENV === 'production',
                 sameSite: 'lax',
-                path: '/api/auth/refresh'
+                path: '/api/auth'
             });
             return res.status(401).json({ message: 'Session not found' });
         }
@@ -618,7 +618,7 @@ const refreshToken = async (req, res) => {
                 httpOnly: true,
                 secure: process.env.NODE_ENV === 'production',
                 sameSite: 'lax',
-                path: '/api/auth/refresh'
+                path: '/api/auth'
             });
             return res.status(401).json({ message: 'Session expired' });
         }
@@ -643,7 +643,7 @@ const refreshToken = async (req, res) => {
             httpOnly: true,
             secure: process.env.NODE_ENV === 'production',
             sameSite: 'lax',
-            path: '/api/auth/refresh',
+            path: '/api/auth',
             maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
         });
 
