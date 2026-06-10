@@ -23,6 +23,10 @@ const SessionSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  location: {
+    type: String,
+    default: ''
+  },
   lastActive: {
     type: Date,
     default: Date.now

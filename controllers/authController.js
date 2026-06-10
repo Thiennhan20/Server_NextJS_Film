@@ -45,6 +45,7 @@ const createSessionAndSendResponse = async (user, res, statusCode = 200, req) =>
     const userAgent = req.headers['user-agent'] || '';
     const device = authService.parseUserAgent(userAgent);
     const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || req.ip || '';
+    const location = await authService.getLocationFromIP(ip);
     const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days
 
     await Session.create({
@@ -54,6 +55,7 @@ const createSessionAndSendResponse = async (user, res, statusCode = 200, req) =>
         userAgent,
         device,
         ip,
+        location,
         expiresAt
     });
 
@@ -636,10 +638,17 @@ const refreshToken = async (req, res) => {
         });
 
         const newRefreshToken = crypto.randomBytes(40).toString('hex');
+        const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || req.ip || '';
         
         session.refreshToken = newRefreshToken;
         session.lastActive = new Date();
         session.expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days
+        
+        if (ip && ip !== session.ip) {
+            session.ip = ip;
+            session.location = await authService.getLocationFromIP(ip);
+        }
+        
         await session.save();
 
         res.cookie('refreshToken', newRefreshToken, {
@@ -668,6 +677,7 @@ const getSessions = async (req, res) => {
             _id: session._id,
             device: session.device,
             ip: session.ip,
+            location: session.location || 'Unknown Location',
             lastActive: session.lastActive,
             isCurrent: session.refreshToken === currentRefreshToken
         }));

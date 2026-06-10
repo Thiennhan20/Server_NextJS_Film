@@ -222,6 +222,37 @@ async function consumeRateLimit(ip) {
     return rateLimiter.consume(ip);
 }
 
+async function getLocationFromIP(ipString) {
+    if (!ipString) return 'Unknown Location';
+    
+    // Split on comma in case of proxy headers like x-forwarded-for
+    const ip = ipString.split(',')[0].trim();
+
+    // Loopback / private IP detection
+    if (ip === '127.0.0.1' || ip === '::1' || ip.startsWith('::ffff:127.0.0.1') || ip.startsWith('fe80') || ip.startsWith('10.') || ip.startsWith('192.168.')) {
+        return 'Local Network';
+    }
+
+    try {
+        // Fetch geolocation from ip-api.com (free, no sign up)
+        const response = await axios.get(`http://ip-api.com/json/${ip}?fields=status,country,city`, {
+            timeout: 5000
+        });
+        
+        if (response.data && response.data.status === 'success') {
+            const { city, country } = response.data;
+            if (city && country) {
+                return `${city}, ${country}`;
+            }
+            return country || city || 'Unknown Location';
+        }
+        return 'Unknown Location';
+    } catch (error) {
+        console.error(`Geo-IP Lookup failed for ${ip}:`, error.message);
+        return 'Unknown Location';
+    }
+}
+
 module.exports = {
     downloadAndOptimizeAvatar,
     createToken,
@@ -234,4 +265,5 @@ module.exports = {
     buildPasswordResetEmailHtml,
     sendPasswordResetEmail,
     parseUserAgent,
+    getLocationFromIP,
 };
