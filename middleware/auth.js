@@ -8,6 +8,9 @@ const auth = async (req, res, next) => {
     if (!token) {
       const authHeader = req.headers.authorization;
       if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        if (req.cookies?.refreshToken) {
+          return res.status(401).json({ message: 'Access token missing', code: 'TOKEN_EXPIRED' });
+        }
         return res.status(401).json({ message: 'No authentication token found' });
       }
       token = authHeader.substring(7); // Bỏ 'Bearer ' prefix
