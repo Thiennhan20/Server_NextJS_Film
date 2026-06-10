@@ -48,6 +48,8 @@ const corsOptions = {
     'https://moviesaw.vercel.app/',
     'https://enterntn.duckdns.org',
     'https://enterntn.duckdns.org/',
+    'https://www.enterntn.duckdns.org',
+    'https://www.enterntn.duckdns.org/',
     'http://localhost:3000',
     'http://localhost:3001',
     'http://localhost:3002',
