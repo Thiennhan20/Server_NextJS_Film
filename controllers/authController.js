@@ -33,12 +33,13 @@ const createSessionAndSendResponse = async (user, res, statusCode = 200, req) =>
     // Create JWT token
     const token = authService.createToken(user._id, sessionId);
 
-    // Set HttpOnly access token cookie (15 mins)
+    // Set HttpOnly access token cookie (7 days)
     res.cookie('token', token, {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'lax',
-        maxAge: 15 * 60 * 1000 // 15 mins
+        path: '/',
+        maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
     });
 
     const refreshToken = crypto.randomBytes(40).toString('hex');
@@ -584,7 +585,8 @@ const logout = async (req, res) => {
         res.clearCookie('token', {
             httpOnly: true,
             secure: process.env.NODE_ENV === 'production',
-            sameSite: 'lax'
+            sameSite: 'lax',
+            path: '/'
         });
 
         res.clearCookie('refreshToken', {
@@ -635,7 +637,8 @@ const refreshToken = async (req, res) => {
             httpOnly: true,
             secure: process.env.NODE_ENV === 'production',
             sameSite: 'lax',
-            maxAge: 15 * 60 * 1000 // 15 mins
+            path: '/',
+            maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
         });
 
         const newRefreshToken = crypto.randomBytes(40).toString('hex');

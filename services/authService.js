@@ -48,7 +48,7 @@ function createToken(userId, sessionId = null) {
     return jwt.sign(
         payload,
         process.env.JWT_SECRET,
-        { expiresIn: '15m' } // 15 minutes Access Token
+        { expiresIn: '7d' } // 7 days Access Token
     );
 }
 
