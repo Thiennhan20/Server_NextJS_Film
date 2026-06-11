@@ -8,6 +8,7 @@ const auth = async (req, res, next) => {
     if (!token) {
       const authHeader = req.headers.authorization;
       if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        // Nếu có refreshToken cookie → access token hết hạn hoặc bị mất, client nên refresh
         if (req.cookies?.refreshToken) {
           return res.status(401).json({ message: 'Access token missing', code: 'TOKEN_EXPIRED' });
         }
@@ -19,6 +20,10 @@ const auth = async (req, res, next) => {
     // Check if token exists in blacklist
     const isBlacklisted = await BlacklistedToken.findOne({ token });
     if (isBlacklisted) {
+      // Nếu token bị blacklist nhưng vẫn có refreshToken → cho client refresh
+      if (req.cookies?.refreshToken) {
+        return res.status(401).json({ message: 'Token has been invalidated', code: 'TOKEN_EXPIRED' });
+      }
       return res.status(401).json({ message: 'Token has been invalidated' });
     }
 
@@ -44,6 +49,10 @@ const auth = async (req, res, next) => {
 
     // Invalidate tokens issued before password was changed
     if (user.passwordChangedAt && decoded.iat && decoded.iat * 1000 < user.passwordChangedAt.getTime()) {
+      // Nếu có refreshToken → cho client refresh với token mới
+      if (req.cookies?.refreshToken) {
+        return res.status(401).json({ message: 'Token has been invalidated', code: 'TOKEN_EXPIRED' });
+      }
       return res.status(401).json({ message: 'Token has been invalidated' });
     }
     
@@ -54,6 +63,10 @@ const auth = async (req, res, next) => {
     console.error('Auth middleware error:', error);
     if (error.name === 'TokenExpiredError') {
       return res.status(401).json({ message: 'Token expired', code: 'TOKEN_EXPIRED' });
+    }
+    // Nếu token verify thất bại nhưng có refreshToken → cho client thử refresh
+    if (req.cookies?.refreshToken) {
+      return res.status(401).json({ message: 'Token invalid', code: 'TOKEN_EXPIRED' });
     }
     res.status(401).json({ message: 'Please authenticate' });
   }
