@@ -60,11 +60,12 @@ const createSessionAndSendResponse = async (user, res, statusCode = 200, req) =>
     });
 
     // Set HttpOnly refresh token cookie (30 days)
+    // path: '/' để Safari tương thích tốt với Vercel rewrite proxy
     res.cookie('refreshToken', refreshToken, {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'lax',
-        path: '/api/auth',
+        path: '/',
         maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
     });
 
@@ -590,7 +591,7 @@ const logout = async (req, res) => {
             httpOnly: true,
             secure: process.env.NODE_ENV === 'production',
             sameSite: 'lax',
-            path: '/api/auth'
+            path: '/'
         });
 
         res.json({ message: 'Logged out successfully' });
@@ -612,7 +613,7 @@ const refreshToken = async (req, res) => {
                 httpOnly: true,
                 secure: process.env.NODE_ENV === 'production',
                 sameSite: 'lax',
-                path: '/api/auth'
+                path: '/'
             });
             return res.status(401).json({ message: 'Session not found' });
         }
@@ -623,7 +624,7 @@ const refreshToken = async (req, res) => {
                 httpOnly: true,
                 secure: process.env.NODE_ENV === 'production',
                 sameSite: 'lax',
-                path: '/api/auth'
+                path: '/'
             });
             return res.status(401).json({ message: 'Session expired' });
         }
@@ -655,7 +656,7 @@ const refreshToken = async (req, res) => {
             httpOnly: true,
             secure: process.env.NODE_ENV === 'production',
             sameSite: 'lax',
-            path: '/api/auth',
+            path: '/',
             maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
         });
 
