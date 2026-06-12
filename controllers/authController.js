@@ -559,24 +559,45 @@ const googleLogin = async (req, res) => {
 // Logout
 const logout = async (req, res) => {
     try {
-        const token = req.token; // Token được đính kèm vào req bởi middleware auth
-        const decoded = jwt.decode(token); // Giải mã token để lấy thông tin expiresAt
-
-        if (!decoded || !decoded.exp) {
-            return res.status(400).json({ message: 'Invalid token provided' });
+        // Lấy token từ header hoặc cookie (không bắt buộc dùng middleware auth)
+        let token = req.token || req.cookies?.token;
+        if (!token) {
+            const authHeader = req.headers.authorization;
+            if (authHeader && authHeader.startsWith('Bearer ')) {
+                token = authHeader.substring(7);
+            }
         }
 
-        const expiresAt = new Date(decoded.exp * 1000); // Chuyển đổi timestamp Unix sang Date object
+        if (token) {
+            try {
+                const decoded = jwt.decode(token);
+                if (decoded && decoded.exp) {
+                    const expiresAt = new Date(decoded.exp * 1000);
+                    
+                    // Blacklist token nếu chưa hết hạn
+                    if (expiresAt > new Date()) {
+                        const exists = await BlacklistedToken.exists({ token });
+                        if (!exists) {
+                            const blacklistedToken = new BlacklistedToken({
+                                token,
+                                expiresAt,
+                            });
+                            await blacklistedToken.save();
+                        }
+                    }
 
-        const blacklistedToken = new BlacklistedToken({
-            token,
-            expiresAt,
-        });
-
-        await blacklistedToken.save();
+                    // Nếu trong token có sessionId thì xóa session tương ứng
+                    if (decoded.sessionId) {
+                        await Session.deleteOne({ _id: decoded.sessionId });
+                    }
+                }
+            } catch (jwtErr) {
+                console.warn('Decode/blacklist token failed on logout:', jwtErr);
+            }
+        }
 
         // Delete database session matching refreshToken
-        const refreshToken = req.cookies?.refreshToken;
+        const refreshToken = req.cookies?.refreshToken || req.body?.refreshToken;
         if (refreshToken) {
             await Session.deleteOne({ refreshToken });
         }
@@ -598,6 +619,7 @@ const logout = async (req, res) => {
 
         res.json({ message: 'Logged out successfully' });
     } catch (error) {
+        console.error('Logout controller error:', error);
         res.status(500).json({ message: 'Server error' });
     }
 };

@@ -36,7 +36,7 @@ router.get('/google/mobile', authController.googleMobileInit);
 router.get('/google/mobile-callback', authController.googleMobileCallback);
 
 // Logout route
-router.post('/logout', auth, authController.logout);
+router.post('/logout', authController.logout);
 
 // Refresh token route (cookie-based, doesn't require standard auth header middleware)
 router.post('/refresh', authController.refreshToken);
