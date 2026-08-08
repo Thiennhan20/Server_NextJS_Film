@@ -2,6 +2,33 @@ const { validationResult } = require('express-validator');
 const Comment = require('../models/Comment');
 const User = require('../models/User');
 const notificationService = require('../services/notificationService');
+const redis = require('../config/redis');
+
+// ─── Redis Cache Keys & TTLs for Homepage Comments ───────────────────────────
+const CACHE_KEY_TOP_COMMENTS = 'homepage:comments:top';
+const CACHE_KEY_RECENT_COMMENTS = 'homepage:comments:recent';
+const CACHE_TTL_TOP = 600;    // 10 minutes (pre-warmed by QStash every 5m)
+const CACHE_TTL_RECENT = 180; // 3 minutes (pre-warmed by QStash every 1m)
+
+// Helper: Invalidate homepage comment caches
+const invalidateCommentCaches = async (which = 'all') => {
+    try {
+        if (which === 'all' || which === 'recent') {
+            const recentKeys = await redis.keys(`${CACHE_KEY_RECENT_COMMENTS}:*`);
+            if (recentKeys.length > 0) {
+                await Promise.all(recentKeys.map(k => redis.del(k)));
+            }
+        }
+        if (which === 'all' || which === 'top') {
+            const topKeys = await redis.keys(`${CACHE_KEY_TOP_COMMENTS}:*`);
+            if (topKeys.length > 0) {
+                await Promise.all(topKeys.map(k => redis.del(k)));
+            }
+        }
+    } catch (err) {
+        console.warn('Invalidate comment cache failed:', err.message);
+    }
+};
 
 // Middleware to validate request
 const validateRequest = (req, res, next) => {
@@ -83,24 +110,28 @@ const collectReplyBranchIds = async (rootId) => {
 };
 
 // GET /api/comments/top - Lấy top comments (most liked or most replied) for homepage
+// Redis cached: 5 minutes TTL, auto-invalidated on create/like/delete
 const getTopComments = async (req, res) => {
     try {
         const { limit = 10, sortBy = 'likes' } = req.query;
         const limitNum = Math.min(Math.max(parseInt(limit, 10), 1), 50);
+        const cacheKey = `${CACHE_KEY_TOP_COMMENTS}:${sortBy}:${limitNum}`;
 
-        // Build aggregation pipeline
+        // 1. Try Redis cache first
+        const cached = await redis.get(cacheKey);
+        if (cached) {
+            const parsed = typeof cached === 'string' ? JSON.parse(cached) : cached;
+            return res.json({ success: true, data: parsed, _cached: true });
+        }
+
+        // 2. Cache miss → query MongoDB
         const pipeline = [
-            // Only get top-level comments that are not deleted
             { $match: { parentId: null, isDeleted: false } },
-
-            // Add reply count field
             {
                 $addFields: {
                     replyCount: { $size: { $ifNull: ['$replies', []] } }
                 }
             },
-
-            // Filter: must have at least 1 like OR 1 reply
             {
                 $match: {
                     $or: [
@@ -109,15 +140,11 @@ const getTopComments = async (req, res) => {
                     ]
                 }
             },
-
-            // Sort by likes or reply count
             {
                 $sort: sortBy === 'replies'
                     ? { replyCount: -1, createdAt: -1 }
                     : { likes: -1, createdAt: -1 }
             },
-
-            // Lookup user info
             {
                 $lookup: {
                     from: 'users',
@@ -126,14 +153,8 @@ const getTopComments = async (req, res) => {
                     as: 'user'
                 }
             },
-
-            // Unwind user array
             { $unwind: '$user' },
-
-            // Limit results
             { $limit: limitNum },
-
-            // Project final shape
             {
                 $project: {
                     _id: 1,
@@ -152,9 +173,13 @@ const getTopComments = async (req, res) => {
 
         const comments = await Comment.aggregate(pipeline);
 
+        // 3. Store in Redis with 5 min TTL
+        await redis.set(cacheKey, comments, CACHE_TTL_TOP);
+
         res.json({
             success: true,
-            data: comments
+            data: comments,
+            _cached: false
         });
     } catch (error) {
         console.error('Get top comments error:', error);
@@ -163,20 +188,24 @@ const getTopComments = async (req, res) => {
 };
 
 // GET /api/comments/recent - Lấy recent comments (newest across all movies) for homepage
+// Redis cached: 1 minute TTL, auto-invalidated on create/delete
 const getRecentComments = async (req, res) => {
     try {
         const { limit = 10 } = req.query;
         const limitNum = Math.min(Math.max(parseInt(limit, 10), 1), 50);
+        const cacheKey = `${CACHE_KEY_RECENT_COMMENTS}:${limitNum}`;
 
-        // Build aggregation pipeline for recent comments
+        // 1. Try Redis cache first
+        const cached = await redis.get(cacheKey);
+        if (cached) {
+            const parsed = typeof cached === 'string' ? JSON.parse(cached) : cached;
+            return res.json({ success: true, data: parsed, _cached: true });
+        }
+
+        // 2. Cache miss → query MongoDB
         const pipeline = [
-            // Only get top-level comments that are not deleted
             { $match: { parentId: null, isDeleted: false } },
-
-            // Sort by creation date (newest first)
             { $sort: { createdAt: -1 } },
-
-            // Lookup user info
             {
                 $lookup: {
                     from: 'users',
@@ -185,14 +214,8 @@ const getRecentComments = async (req, res) => {
                     as: 'user'
                 }
             },
-
-            // Unwind user array
             { $unwind: '$user' },
-
-            // Limit results
             { $limit: limitNum },
-
-            // Project final shape
             {
                 $project: {
                     _id: 1,
@@ -209,9 +232,13 @@ const getRecentComments = async (req, res) => {
 
         const comments = await Comment.aggregate(pipeline);
 
+        // 3. Store in Redis with 1 min TTL
+        await redis.set(cacheKey, comments, CACHE_TTL_RECENT);
+
         res.json({
             success: true,
-            data: comments
+            data: comments,
+            _cached: false
         });
     } catch (error) {
         console.error('Get recent comments error:', error);
@@ -507,6 +534,9 @@ const createComment = async (req, res) => {
             });
         }
 
+        // Invalidate homepage comment caches (new comment affects "recent", reply affects "top")
+        await invalidateCommentCaches('all');
+
         res.status(201).json({
             success: true,
             message: 'Comment created successfully',
@@ -563,6 +593,9 @@ const toggleLike = async (req, res) => {
         const updatedComment = await Comment.findById(id)
             .populate('userId', 'name avatar')
             .lean();
+
+        // Invalidate top comments cache (like count changed)
+        await invalidateCommentCaches('top');
 
         res.json({
             success: true,
@@ -657,6 +690,9 @@ const deleteComment = async (req, res) => {
 
         await Comment.deleteMany({ _id: { $in: deletedCommentIds } });
         await notificationService.deleteNotificationsForComments(deletedCommentIds);
+
+        // Invalidate both caches (deleted comment may have been in top or recent)
+        await invalidateCommentCaches('all');
 
         res.json({
             success: true,
