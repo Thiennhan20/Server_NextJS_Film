@@ -5,6 +5,7 @@ const cookieParser = require('cookie-parser');
 const helmet = require('helmet');
 const compression = require('compression');
 const mongoose = require('mongoose');
+const axios = require('axios');
 require('dotenv').config();
 
 const initializeWebSocket = require('./websocket');
@@ -228,6 +229,23 @@ app.get('/health', async (req, res) => {
 });
 
 
+// Kiểm tra địa chỉ IP và vị trí mạng của server
+app.get('/ip-info', async (req, res) => {
+  try {
+    const ipRes = await axios.get('http://ip-api.com/json', { timeout: 5000 });
+    res.json({
+      ip: ipRes.data.query,
+      city: ipRes.data.city,
+      region: ipRes.data.regionName,
+      country: ipRes.data.country,
+      isp: ipRes.data.isp,
+      org: ipRes.data.org
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
   console.log(`
@@ -240,4 +258,13 @@ server.listen(PORT, () => {
     ║  Rate Limit:                                           ║
     ╚════════════════════════════════════════════════════════╝
     `);
+
+  // Log outbound network IP & location
+  axios.get('http://ip-api.com/json', { timeout: 5000 })
+    .then(r => {
+      console.log(`🌐 Server Outbound IP: ${r.data.query} (${r.data.city || ''}, ${r.data.country || ''} - ISP: ${r.data.isp || r.data.org || ''})`);
+    })
+    .catch(err => {
+      console.log('🌐 Could not fetch public IP:', err.message);
+    });
 }); 

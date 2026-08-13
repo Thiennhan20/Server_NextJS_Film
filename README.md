@@ -18,7 +18,7 @@
 
 <br />
 
-[🌐 API Server](https://server-nextjs-firm.onrender.com) · [🎬 Frontend Repo](https://github.com/) · [📧 Contact](mailto:nhanntn2203@gmail.com)
+[🌐 API Server](https://server-nextjs-film.onrender.com) · [🎬 Frontend Repo](https://github.com/) · [📧 Contact](mailto:nhanntn2203@gmail.com)
 
 <br />
   
@@ -291,7 +291,7 @@ Server runs on `http://localhost:3001` by default.
 
 - [Frontend Client Repository](https://github.com/) — Next.js 15 with 3D visuals & streaming UI
 - [Live Application](https://moviesaw.vercel.app/)
-- [API Server](https://server-nextjs-firm.onrender.com)
+- [API Server](https://server-nextjs-film.onrender.com)
 
 ---
 

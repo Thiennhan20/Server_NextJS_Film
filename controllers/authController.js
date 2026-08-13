@@ -1149,7 +1149,7 @@ const googleMobileInit = (req, res) => {
 
         // GOOGLE_REDIRECT_BASE_URL cho phép cấu hình redirect URI chính xác
         // Local dev: http://localhost:3001 (Google chấp nhận localhost)
-        // Production: https://server-nextjs-firm.onrender.com
+        // Production: https://server-nextjs-film.onrender.com
         const redirectUri = getGoogleMobileRedirectUri(req);
         const state = createGoogleMobileState(returnUri);
 
