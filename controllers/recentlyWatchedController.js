@@ -15,9 +15,9 @@ const getList = async (req, res) => {
             return res.status(429).json({ code: 'RATE_LIMITED', message: 'Too many requests' });
         }
 
-        const { contentId, isTVShow, season, episode } = req.query;
+        const { contentId, isTVShow, season, episode, audio } = req.query;
         if (contentId) {
-            // Return single item — only need content identity, not server/audio
+            // Return single item for specific audio if provided, or most recent audio
             const filter = {
                 userId: req.user,
                 contentId,
@@ -25,7 +25,10 @@ const getList = async (req, res) => {
                 season: season ? Number(season) : null,
                 episode: episode ? Number(episode) : null,
             };
-            const item = await projectClean(WatchProgress.findOne(filter)).lean();
+            if (audio) {
+                filter.audio = normalizeField(audio);
+            }
+            const item = await projectClean(WatchProgress.findOne(filter).sort({ lastWatched: -1 })).lean();
             return res.json({ item });
         }
 
@@ -93,8 +96,8 @@ const upsertProgress = async (req, res) => {
         const normServer = normalizeField(server);
         const normAudio = normalizeField(audio);
 
-        // Filter only by content identity (not server/audio)
-        const filter = { userId: req.user, contentId, isTVShow, season, episode };
+        // Filter by content identity AND audio track
+        const filter = { userId: req.user, contentId, isTVShow, season, episode, audio: normAudio };
 
         const update = {
             $set: {
@@ -122,11 +125,13 @@ const upsertProgress = async (req, res) => {
 // Delete an item
 const deleteItem = async (req, res) => {
     try {
-        const { contentId, isTVShow = false, season = null, episode = null } = req.body || {};
+        const { contentId, isTVShow = false, season = null, episode = null, audio = null } = req.body || {};
         if (!contentId) {
             return res.status(400).json({ code: 'VALIDATION_ERROR', errors: ['CONTENT_ID_REQUIRED'] });
         }
-        await WatchProgress.deleteOne({ userId: req.user, contentId, isTVShow, season, episode });
+        const filter = { userId: req.user, contentId, isTVShow, season, episode };
+        if (audio) filter.audio = normalizeField(audio);
+        await WatchProgress.deleteOne(filter);
         invalidateCache(req.user);
         res.json({ ok: true });
     } catch (e) {
@@ -145,17 +150,17 @@ const batchDelete = async (req, res) => {
         if (!Array.isArray(items) || items.length === 0) {
             return res.status(400).json({ code: 'VALIDATION_ERROR', errors: ['ITEMS_REQUIRED'] });
         }
-        const ops = items.map((it) => ({
-            deleteOne: {
-                filter: {
-                    userId: req.user,
-                    contentId: it.contentId,
-                    isTVShow: !!it.isTVShow,
-                    season: it.isTVShow ? (it.season ?? null) : null,
-                    episode: it.isTVShow ? (it.episode ?? null) : null,
-                }
-            }
-        }));
+        const ops = items.map((it) => {
+            const filter = {
+                userId: req.user,
+                contentId: it.contentId,
+                isTVShow: !!it.isTVShow,
+                season: it.isTVShow ? (it.season ?? null) : null,
+                episode: it.isTVShow ? (it.episode ?? null) : null,
+            };
+            if (it.audio) filter.audio = normalizeField(it.audio);
+            return { deleteOne: { filter } };
+        });
         const result = await WatchProgress.bulkWrite(ops, { ordered: false });
         invalidateCache(req.user);
         res.json({ ok: true, deleted: result?.deletedCount || 0 });

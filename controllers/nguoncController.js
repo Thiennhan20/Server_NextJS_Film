@@ -21,7 +21,7 @@ const searchTVShow = async (req, res) => {
         }
         res.json({ status: 'not_found' });
     } catch (e) {
-        res.status(500).json({ error: 'Server Error' });
+        res.status(500).json({ error: 'Server Error', message: e.message });
     }
 };
 
@@ -44,7 +44,7 @@ const searchMovie = async (req, res) => {
 
         res.json({ status: 'not_found' });
     } catch (e) {
-        res.status(500).json({ error: 'Server Error' });
+        res.status(500).json({ error: 'Server Error', message: e.message });
     }
 };
 

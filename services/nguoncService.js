@@ -61,10 +61,11 @@ async function searchNguonc(keyword, targetOriginalName) {
     const allItems = [];
     let page = 1;
     let totalPages = 1;
+    const cleanKw = keyword.trim();
 
     try {
         while (page <= totalPages && page <= 5) {
-            const res = await axios.get(`https://phim.nguonc.com/api/films/search?keyword=${encodeURIComponent(keyword.trim())}&page=${page}`);
+            const res = await axios.get(`https://phim.nguonc.com/api/films/search?keyword=${encodeURIComponent(cleanKw)}&page=${page}`);
             const data = res.data;
             if (data?.status !== 'success' || !data.items || data.items.length === 0) {
                 break;
@@ -92,7 +93,13 @@ async function getBestMatchTVShow(keyword, normalizedTitle, cleanTitle, season, 
     // 1. Search by keyword
     let items = await searchNguonc(keyword);
 
-    // 1a. Variations for season searches
+    // 1a. Fallback search without colons/special characters if primary search returned 0 items
+    const cleanKw = keyword.replace(/[:\-–—(),]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (items.length === 0 && cleanKw !== keyword.trim()) {
+        items = await searchNguonc(cleanKw);
+    }
+
+    // 1b. Variations for season searches
     const seasonKeywords = [
         `${keyword} ${season}`,
         `${keyword} phần ${season}`,
@@ -118,7 +125,7 @@ async function getBestMatchTVShow(keyword, normalizedTitle, cleanTitle, season, 
         }
     }
 
-    // Fallback: search with Vietnamese name if English name misses the season
+    // Fallback: search with Vietnamese name if English name misses the season or returned nothing
     if (items.length > 0) {
         let hasCorrectSeason = false;
         for (const item of items) {
@@ -130,8 +137,10 @@ async function getBestMatchTVShow(keyword, normalizedTitle, cleanTitle, season, 
         }
         if (!hasCorrectSeason && normalizedTitle && normalizedTitle !== cleanTitle) {
             const viItems = await searchNguonc(normalizedTitle);
-            items = viItems; // Replace items
+            if (viItems.length > 0) items = viItems;
         }
+    } else if (normalizedTitle && normalizedTitle !== cleanTitle) {
+        items = await searchNguonc(normalizedTitle);
     }
 
     // Search with year if no results
@@ -201,7 +210,7 @@ async function getBestMatchTVShow(keyword, normalizedTitle, cleanTitle, season, 
         }
     }
 
-    // Verify with detail API — check ALL candidates, not just 4
+    // Verify with detail API — check ALL candidates
     if (tmdbYear || season > 1) {
         const toVerify = [bestMatch, ...candidates.filter(m => m.slug !== bestMatch.slug)];
         for (const candidate of toVerify) {
@@ -209,16 +218,13 @@ async function getBestMatchTVShow(keyword, normalizedTitle, cleanTitle, season, 
             if (detail?.category) {
                 const yearStr = Object.values(detail.category).find(cat => cat.group?.name === 'Năm')?.list?.[0]?.name;
                 const detailYear = yearStr ? parseInt(yearStr) : 0;
-                // For season > 1, relax year matching since TMDB year is first-air-date
-                // which differs from individual season release years
                 const yearMatch = detailYear === tmdbYear;
-                const yearClose = Math.abs(detailYear - tmdbYear) <= 10; // Same franchise within 10 years
+                const yearClose = Math.abs(detailYear - tmdbYear) <= 10;
                 const detailSeason = extractSeasonFromTitle(detail.name || '', detail.slug || '');
                 const seasonMatch = season === 1
                     ? (detailSeason === null || detailSeason === 1)
                     : detailSeason === season;
 
-                // For season > 1: prioritize season match, relax year requirement
                 if (seasonMatch && detail.episodes) {
                     if (yearMatch || yearClose || season > 1) {
                         return detail;
@@ -228,14 +234,11 @@ async function getBestMatchTVShow(keyword, normalizedTitle, cleanTitle, season, 
         }
     }
 
-    // Fallback: If no single clear match via Year, just pick the best scoring item and fetch details
-    // BUT only if bestScore is positive (not a wrong-season match)
     if (bestScore < 0) {
         return null;
     }
     const fallbackDetail = await fetchFilmBySlug(bestMatch.slug);
     
-    // Final season verification on the fetched detail
     if (fallbackDetail) {
         const fallbackSeason = extractSeasonFromTitle(fallbackDetail.name || '', fallbackDetail.slug || '');
         const seasonOk = season === 1
@@ -244,8 +247,35 @@ async function getBestMatchTVShow(keyword, normalizedTitle, cleanTitle, season, 
         if (!seasonOk) {
             return null;
         }
+        return fallbackDetail;
     }
-    return fallbackDetail;
+    return null;
+}
+
+// Helper: Check if episode name or slug matches selected episode
+function isEpisodeMatch(epName, epSlug, targetEpisode) {
+    if (!epName && !epSlug) return false;
+    const n = (epName || '').toLowerCase().trim();
+    const s = (epSlug || '').toLowerCase().trim();
+    const epStr = targetEpisode.toString();
+    const epPadded = epStr.padStart(2, '0');
+
+    // Single episode or full movie match
+    if (targetEpisode === 1 && (n === 'full' || n === 'tập full' || s === 'tap-full' || s === 'full' || n === 'phim lẻ' || n === 'hd')) return true;
+
+    // Direct string equality
+    if (n === `tập ${epStr}` || n === `tập ${epPadded}` || n === `episode ${epStr}` || n === epStr || n === epPadded) return true;
+    if (s === `tap-${epStr}` || s === `tap-${epPadded}` || s === epStr || s === epPadded) return true;
+
+    // Flexible regex matching for patterns like "Tập 1 - HD", "Tap 01 (Vietsub)", "Ep.1"
+    const pattern = new RegExp(`(?:tập|tap|ep|episode)\\s*[-._]?\\s*0*${epStr}(?:\\s*[-:(].*)?$`, 'i');
+    if (pattern.test(n) || pattern.test(s)) return true;
+
+    // Match leading number in episode name: "01" or "1 - HD"
+    const leadingNum = n.match(/^0*(\d+)/);
+    if (leadingNum && parseInt(leadingNum[1]) === targetEpisode) return true;
+
+    return false;
 }
 
 // Extract TV show links
@@ -260,23 +290,16 @@ function extractLinksForEpisode(episodesData, selectedEpisode) {
         const isDubbed = serverName.includes('thuyet minh') || serverName.includes('long tieng') || serverName.includes('dubbed');
 
         const serverData = epServer.server_data || epServer.items;
-        const epData = serverData?.find(ep => {
-            const n = ep.name?.toLowerCase() || '';
-            // Nguonc api often uses "phần", "tập full", "full" as name too, need exact or fallback matches
-            return n === `tập ${selectedEpisode}` ||
-                n === `episode ${selectedEpisode}` ||
-                n === selectedEpisode.toString() ||
-                n === `tập ${selectedEpisode.toString().padStart(2, '0')}` ||
-                n === 'full' || n === 'tập full';
-        });
+        const epData = serverData?.find(ep => isEpisodeMatch(ep.name, ep.slug, selectedEpisode));
 
         if (epData) {
-            const link = epData.embed || epData.link_embed || epData.m3u8 || epData.link_m3u8;
+            const link = epData.embed || epData.link_embed;
             if (isVietsub && link) bestVietsub = link;
             if (isDubbed && link) bestDubbed = link;
-            if (link) fallback = link;
+            if (link && !fallback) fallback = link;
         }
     }
+
     return {
         vietsub: bestVietsub,
         dubbed: bestDubbed,
@@ -294,18 +317,39 @@ function directorsMatch(tmdbDirector, nguoncDirector) {
 }
 
 async function getBestMatchMovie(keyword, normalizedTitle, cleanTitle, tmdbYear, tmdbDirector) {
+    // 1. Primary search with keyword
     let items = await searchNguonc(keyword);
 
+    // 1a. Fallback search without colons/special characters if primary search returned 0 items
+    const cleanKw = keyword.replace(/[:\-–—(),]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (items.length === 0 && cleanKw !== keyword.trim()) {
+        items = await searchNguonc(cleanKw);
+    }
+
+    // 1b. Fallback search with Vietnamese title if English title produced 0 items
+    if (items.length === 0 && normalizedTitle && normalizedTitle !== cleanTitle) {
+        items = await searchNguonc(normalizedTitle);
+    }
+
+    // 1c. Fallback search with cleanTitle
+    if (items.length === 0 && cleanTitle && cleanTitle !== cleanKw) {
+        items = await searchNguonc(cleanTitle);
+    }
+
+    // 1d. Fallback search with Year
     if (items.length === 0 && tmdbYear) {
         const yearKeyword = `${cleanTitle} ${tmdbYear}`;
         items = await searchNguonc(yearKeyword);
     }
-    if (items.length === 0) return null;
+
+    if (items.length === 0) {
+        return null;
+    }
 
     let nameMatches = items.filter((item) => {
         const origName = normalizeForCompare(item.original_name || '');
         const viName = item.name?.toLowerCase().trim() || '';
-        return origName === cleanTitle || viName === normalizedTitle;
+        return origName === cleanTitle || viName === normalizedTitle || viName.includes(normalizedTitle);
     });
 
     const candidates = nameMatches.length > 0 ? nameMatches : items;
@@ -318,10 +362,10 @@ async function getBestMatchMovie(keyword, normalizedTitle, cleanTitle, tmdbYear,
         const viName = candidate.name?.toLowerCase().trim() || '';
 
         if (viName === normalizedTitle) score += 3;
-        else if (viName.startsWith(normalizedTitle + ' ')) score += 1;
+        else if (viName.startsWith(normalizedTitle + ' ') || viName.includes(normalizedTitle)) score += 1;
 
         if (origName === cleanTitle) score += 3;
-        else if (origName.startsWith(cleanTitle + ' ')) score += 1;
+        else if (origName.startsWith(cleanTitle + ' ') || origName.includes(cleanTitle)) score += 1;
 
         if (tmdbDirector && candidate.director) {
             if (directorsMatch(tmdbDirector, candidate.director)) {
@@ -365,7 +409,7 @@ function extractMovieLinks(detail) {
             if (serverData && serverData.length > 0) {
                 const serverName = normalizeForCompare(episode.server_name || '');
                 const epData = serverData[0];
-                const link = epData.embed || epData.link_embed || epData.m3u8 || epData.link_m3u8;
+                const link = epData.embed || epData.link_embed;
                 if (serverName.includes('thuyet minh') || serverName.includes('long tieng') || serverName.includes('dubbed')) {
                     dubbed = link;
                 } else if (serverName.includes('vietsub')) {

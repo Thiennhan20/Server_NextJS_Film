@@ -32,7 +32,7 @@ app.use(helmet({
       defaultSrc: ["'self'"],
       imgSrc: ["'self'", "data:", "https:"],
       scriptSrc: ["'self'", "'unsafe-inline'"],
-      frameSrc: ["'self'", "https://vidsrc.icu", "https://www.youtube.com"],
+      frameSrc: ["'self'", "https://vidsrc.icu", "https://www.youtube.com", "https://*.streamc.xyz", "https://embed.streamc.xyz", "https://phim.nguonc.com", "https://*.nguonc.com"],
     },
   },
 }));
@@ -74,7 +74,15 @@ mongoose.connect(process.env.MONGODB_URI, {
   serverSelectionTimeoutMS: 5000,
   socketTimeoutMS: 45000,
 })
-  .then(() => console.log('✅ Connected to MongoDB'))
+  .then(async () => {
+    console.log('✅ Connected to MongoDB');
+    try {
+      const WatchProgress = require('./models/WatchProgress');
+      await WatchProgress.syncIndexes();
+    } catch {
+      // Sync indexes silently in background
+    }
+  })
   .catch(err => {
     console.error('❌ MongoDB connection error:', err);
     process.exit(1);

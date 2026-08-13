@@ -16,8 +16,8 @@ const watchProgressSchema = new mongoose.Schema({
   lastWatched: { type: Date, default: Date.now },
 }, { timestamps: true });
 
-// Unique per user + content (1 record per movie/episode, regardless of server/audio)
-watchProgressSchema.index({ userId: 1, contentId: 1, isTVShow: 1, season: 1, episode: 1 }, { unique: true });
+// Unique per user + content + audio track
+watchProgressSchema.index({ userId: 1, contentId: 1, isTVShow: 1, season: 1, episode: 1, audio: 1 }, { unique: true });
 // Fast recent query
 watchProgressSchema.index({ userId: 1, lastWatched: -1 });
 
