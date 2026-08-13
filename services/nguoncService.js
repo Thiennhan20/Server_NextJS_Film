@@ -1,5 +1,18 @@
 const axios = require('axios');
 
+// Axios client with browser headers to avoid being blocked by Cloudflare/WAF
+const nguoncClient = axios.create({
+    headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Referer': 'https://phim.nguonc.com/',
+        'Origin': 'https://phim.nguonc.com',
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache'
+    }
+});
+
 // Helper: Normalize string for comparison (remove diacritics, lowercase, remove punctuation)
 function normalizeForCompare(str) {
     if (!str) return '';
@@ -47,7 +60,7 @@ function titleContainsSeason(title, slug) {
 // Helper: Fetch film by slug (with retry)
 async function fetchFilmBySlug(slug) {
     try {
-        const res = await axios.get(`https://phim.nguonc.com/api/film/${encodeURIComponent(slug)}`);
+        const res = await nguoncClient.get(`https://phim.nguonc.com/api/film/${encodeURIComponent(slug)}`);
         if (res.data?.status === 'success' && res.data?.movie) {
             return res.data.movie;
         }
@@ -65,7 +78,7 @@ async function searchNguonc(keyword, targetOriginalName) {
 
     try {
         while (page <= totalPages && page <= 5) {
-            const res = await axios.get(`https://phim.nguonc.com/api/films/search?keyword=${encodeURIComponent(cleanKw)}&page=${page}`);
+            const res = await nguoncClient.get(`https://phim.nguonc.com/api/films/search?keyword=${encodeURIComponent(cleanKw)}&page=${page}`);
             const data = res.data;
             if (data?.status !== 'success' || !data.items || data.items.length === 0) {
                 break;
