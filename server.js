@@ -111,6 +111,7 @@ app.use('/api/rooms', roomRoutes);
 app.use('/api/search-history', searchHistoryRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/friends', friendsRoutes);
+app.use('/api/vidsrc', require('./routes/vidsrc'));
 
 // Tạo HTTP server
 const server = http.createServer(app);
