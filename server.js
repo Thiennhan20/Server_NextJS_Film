@@ -23,6 +23,8 @@ const notificationRoutes = require('./routes/notifications');
 const friendsRoutes = require('./routes/friends');
 
 const app = express();
+app.set('trust proxy', 1); // Cho phép Express nhận đúng HTTPS protocol đằng sau Render Reverse Proxy
+
 // Security middleware
 app.use(helmet({
   crossOriginEmbedderPolicy: false, // Tắt để tương thích Safari
