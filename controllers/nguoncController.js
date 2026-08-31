@@ -207,6 +207,27 @@ const embedProxy = async (req, res) => {
             };
           }
 
+          // Intercept HTMLMediaElement src property & setAttribute for native Safari iOS HLS playback
+          try {
+            const origSrcDesc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src');
+            if (origSrcDesc && origSrcDesc.set) {
+              Object.defineProperty(HTMLMediaElement.prototype, 'src', {
+                get: origSrcDesc.get,
+                set: function(val) {
+                  const proxyTarget = resolveProxyUrl(val);
+                  return origSrcDesc.set.call(this, proxyTarget);
+                }
+              });
+            }
+            const origSetAttribute = HTMLMediaElement.prototype.setAttribute;
+            HTMLMediaElement.prototype.setAttribute = function(name, val) {
+              if (String(name).toLowerCase() === 'src') {
+                val = resolveProxyUrl(val);
+              }
+              return origSetAttribute.call(this, name, val);
+            };
+          } catch(e) {}
+
           document.addEventListener('DOMContentLoaded', function() {
             window.popupReady = true;
             window.playerBlocked = false;
