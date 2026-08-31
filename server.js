@@ -27,15 +27,9 @@ const app = express();
 app.use(helmet({
   crossOriginEmbedderPolicy: false, // Tắt để tương thích Safari
   crossOriginOpenerPolicy: false,
-  contentSecurityPolicy: {
-    useDefaults: true,
-    directives: {
-      defaultSrc: ["'self'"],
-      imgSrc: ["'self'", "data:", "https:"],
-      scriptSrc: ["'self'", "'unsafe-inline'"],
-      frameSrc: ["'self'", "https://vidsrc.icu", "https://www.youtube.com", "https://*.streamc.xyz", "https://embed.streamc.xyz", "https://phim.nguonc.com", "https://*.nguonc.com"],
-    },
-  },
+  crossOriginResourcePolicy: false,
+  frameguard: false, // Cho phép iframe nhúng từ client domain (localhost:3000, vercel, duckdns)
+  contentSecurityPolicy: false,
 }));
 app.disable('x-powered-by');
 

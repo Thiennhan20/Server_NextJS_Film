@@ -61,12 +61,11 @@ function titleContainsSeason(title, slug) {
 async function fetchFilmBySlug(slug) {
     try {
         const res = await nguoncClient.get(`https://phim.nguonc.com/api/film/${encodeURIComponent(slug)}`);
-        console.log(`[Nguonc API] Fetch slug "${slug}" -> Status: ${res.status}, Success: ${res.data?.status === 'success'}`);
         if (res.data?.status === 'success' && res.data?.movie) {
             return res.data.movie;
         }
     } catch (e) {
-        console.error(`[Nguonc API Error] Fetch slug "${slug}" failed: ${e.message} (HTTP ${e.response?.status || 'N/A'})`);
+        // Fetch failed
     }
     return null;
 }
@@ -82,7 +81,6 @@ async function searchNguonc(keyword, targetOriginalName) {
         while (page <= totalPages && page <= 5) {
             const res = await nguoncClient.get(`https://phim.nguonc.com/api/films/search?keyword=${encodeURIComponent(cleanKw)}&page=${page}`);
             const data = res.data;
-            console.log(`[Nguonc API] Search "${cleanKw}" (page ${page}) -> Status: ${res.status}, Items: ${data?.items?.length || 0}`);
             if (data?.status !== 'success' || !data.items || data.items.length === 0) {
                 break;
             }
@@ -100,7 +98,7 @@ async function searchNguonc(keyword, targetOriginalName) {
             page++;
         }
     } catch (e) {
-        console.error(`[Nguonc API Error] Search "${cleanKw}" failed: ${e.message} (HTTP ${e.response?.status || 'N/A'})`);
+        // Search failed
     }
     return allItems;
 }
