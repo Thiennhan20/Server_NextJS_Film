@@ -14,4 +14,7 @@ router.get('/embed-proxy', nguoncController.embedProxy);
 // Stream & Segment Proxy
 router.get('/proxy', nguoncController.proxyStream);
 
+// Stream URL Extractor (bypasses iframe, returns proxied M3U8 URL for native playback)
+router.get('/stream-url', nguoncController.streamUrl);
+
 module.exports = router;
