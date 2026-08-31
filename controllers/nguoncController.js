@@ -292,11 +292,53 @@ const proxyStream = async (req, res) => {
         });
 
         const contentType = proxyRes.headers['content-type'] || 'application/vnd.apple.mpegurl';
+        let dataBuf = Buffer.from(proxyRes.data);
+        const textContent = dataBuf.toString('utf-8');
+
+        // M3U8 Playlist Rewriter for Native iOS Safari & HLS compatibility
+        if (textContent.includes('#EXTM3U')) {
+            const protocol = req.protocol || 'http';
+            const host = req.get('host') || 'localhost:3001';
+            const serverOrigin = `${protocol}://${host}`;
+
+            const lines = textContent.split('\n');
+            const rewrittenLines = lines.map(line => {
+                const trimmed = line.trim();
+                if (!trimmed || trimmed.startsWith('#')) {
+                    if (trimmed.includes('URI="')) {
+                        return trimmed.replace(/URI="([^"]+)"/g, (match, keyUrl) => {
+                            let absKeyUrl = keyUrl;
+                            if (keyUrl.startsWith('//')) absKeyUrl = 'https:' + keyUrl;
+                            else if (keyUrl.startsWith('/')) absKeyUrl = parsed.origin + keyUrl;
+                            else if (!keyUrl.startsWith('http')) absKeyUrl = parsed.origin + '/' + keyUrl;
+                            const proxiedKey = `${serverOrigin}/api/server3/proxy?url=${encodeURIComponent(absKeyUrl)}&ref=${encodeURIComponent(refUrl)}`;
+                            return `URI="${proxiedKey}"`;
+                        });
+                    }
+                    return line;
+                }
+
+                let absSegmentUrl = trimmed;
+                if (trimmed.startsWith('//')) {
+                    absSegmentUrl = 'https:' + trimmed;
+                } else if (trimmed.startsWith('/')) {
+                    absSegmentUrl = parsed.origin + trimmed;
+                } else if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
+                    const baseUrl = targetUrl.substring(0, targetUrl.lastIndexOf('/') + 1);
+                    absSegmentUrl = baseUrl + trimmed;
+                }
+
+                return `${serverOrigin}/api/server3/proxy?url=${encodeURIComponent(absSegmentUrl)}&ref=${encodeURIComponent(refUrl)}`;
+            });
+
+            dataBuf = Buffer.from(rewrittenLines.join('\n'), 'utf-8');
+        }
+
         res.setHeader('Content-Type', contentType);
         res.setHeader('Access-Control-Allow-Origin', '*');
         res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
         res.setHeader('Cache-Control', 'no-store');
-        res.send(Buffer.from(proxyRes.data));
+        res.send(dataBuf);
     } catch (err) {
         console.error('[Stream Proxy Error]:', err.message);
         res.status(err.response?.status || 500).send('Stream proxy error: ' + err.message);
