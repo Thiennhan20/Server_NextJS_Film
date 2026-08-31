@@ -295,8 +295,8 @@ const proxyStream = async (req, res) => {
         let dataBuf = Buffer.from(proxyRes.data);
         const textContent = dataBuf.toString('utf-8');
 
-        // M3U8 Playlist Rewriter for Native iOS Safari & HLS compatibility
-        if (textContent.includes('#EXTM3U')) {
+        // M3U8 Playlist Rewriter for Native iOS Safari & HLS compatibility (do NOT rewrite encrypted StreamC #ENC-AESGCM payloads)
+        if (textContent.includes('#EXTM3U') && !textContent.includes('#ENC-AESGCM')) {
             const protocol = req.protocol || 'http';
             const host = req.get('host') || 'localhost:3001';
             const serverOrigin = `${protocol}://${host}`;
