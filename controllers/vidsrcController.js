@@ -92,10 +92,9 @@ const embedProxy = async (req, res) => {
         html = html.replace(/histats/gi, 'nohistats');
         html = html.replace(/VS_DEVTOOLS/g, 'NO_DEVTOOLS');
         html = html.replace(/VS_EXPIRED/g, 'NO_EXPIRED');
-        html = html.replace(/isApple\s*=\s*isIOS\s*\|\|\s*isMac/gi, 'isApple = false');
 
         const embedOrigin = parsed.origin;
-        const protocol = req.protocol || 'http';
+        const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'http';
         const host = req.get('host') || 'localhost:3001';
         const serverOrigin = `${protocol}://${host}`;
 
@@ -311,6 +310,10 @@ const proxyStream = async (req, res) => {
                                  lowerUrl.includes('.m3u8') || 
                                  lowerUrl.includes('.ts') || 
                                  lowerUrl.includes('.vtt') || 
+                                 lowerUrl.includes('.srt') || 
+                                 lowerUrl.includes('/subtitles/') || 
+                                 lowerUrl.includes('/sub/') || 
+                                 lowerUrl.includes('opensubtitles') || 
                                  lowerUrl.includes('.key') || 
                                  lowerUrl.includes('.wasm') || 
                                  lowerUrl.includes('.woff') || 
@@ -376,7 +379,7 @@ const proxyStream = async (req, res) => {
 
         // M3U8 Playlist Rewriter
         if (textContent.includes('#EXTM3U')) {
-            const protocol = req.protocol || 'http';
+            const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'http';
             const host = req.get('host') || 'localhost:3001';
             const serverOrigin = `${protocol}://${host}`;
             const targetBaseUrl = targetUrl.substring(0, targetUrl.lastIndexOf('/') + 1);
@@ -416,6 +419,8 @@ const proxyStream = async (req, res) => {
         res.setHeader('Content-Type', contentType);
         res.setHeader('Access-Control-Allow-Origin', '*');
         res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', '*');
+        res.setHeader('Accept-Ranges', 'bytes');
         res.setHeader('Cache-Control', 'no-store');
         res.send(dataBuf);
     } catch (err) {
@@ -424,6 +429,9 @@ const proxyStream = async (req, res) => {
         if (err.response) {
             console.error(`[vidsrc-proxy] Status Details: ${err.response.status} ${err.response.statusText}`);
         }
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', '*');
         res.status(statusCode).send('VidSrc stream proxy error: ' + err.message);
     }
 };
