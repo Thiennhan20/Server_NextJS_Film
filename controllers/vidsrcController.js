@@ -358,19 +358,31 @@ const proxyStream = async (req, res) => {
             originUrlStr = 'https://cloudorchestranova.com';
         }
 
+        const passHeaders = {
+            'User-Agent': targetUrl.includes('opensubtitles') 
+                ? 'TemporaryUserAgent' 
+                : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+            'Accept': '*/*',
+            'Accept-Language': 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
+        };
+
+        if (!targetUrl.includes('opensubtitles')) {
+            passHeaders['Referer'] = refUrl;
+            passHeaders['Origin'] = originUrlStr;
+            passHeaders['Sec-Ch-Ua'] = '"Google Chrome";v="125", "Chromium";v="125", "Not.A/Brand";v="24"';
+            passHeaders['Sec-Ch-Ua-Mobile'] = '?0';
+            passHeaders['Sec-Ch-Ua-Platform'] = '"Windows"';
+        }
+
+        if (req.headers['range']) {
+            passHeaders['Range'] = req.headers['range'];
+        }
+
         const proxyRes = await axios.get(targetUrl, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-                'Accept': '*/*',
-                'Accept-Language': 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
-                'Referer': refUrl,
-                'Origin': originUrlStr,
-                'Sec-Ch-Ua': '"Google Chrome";v="125", "Chromium";v="125", "Not.A/Brand";v="24"',
-                'Sec-Ch-Ua-Mobile': '?0',
-                'Sec-Ch-Ua-Platform': '"Windows"',
-            },
+            headers: passHeaders,
             responseType: 'arraybuffer',
-            timeout: 15000
+            timeout: 15000,
+            validateStatus: status => status >= 200 && status < 400
         });
 
         const contentType = proxyRes.headers['content-type'] || 'application/octet-stream';
@@ -422,7 +434,15 @@ const proxyStream = async (req, res) => {
         res.setHeader('Access-Control-Allow-Headers', '*');
         res.setHeader('Accept-Ranges', 'bytes');
         res.setHeader('Cache-Control', 'no-store');
-        res.send(dataBuf);
+
+        if (proxyRes.headers['content-range']) {
+            res.setHeader('Content-Range', proxyRes.headers['content-range']);
+        }
+        if (proxyRes.headers['content-length']) {
+            res.setHeader('Content-Length', proxyRes.headers['content-length']);
+        }
+
+        res.status(proxyRes.status).send(dataBuf);
     } catch (err) {
         const statusCode = err.response ? err.response.status : 500;
         console.error(`[vidsrc-proxy] ❌ Error (${statusCode}) for ${targetUrl}:`, err.message);
