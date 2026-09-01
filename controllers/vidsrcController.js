@@ -252,15 +252,29 @@ const embedProxy = async (req, res) => {
 
           if (window.fetch) {
             const rawFetch = window.fetch;
-            window.fetch = async function(...args) {
-              const url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url) ? args[0].url : String(args[0]);
-              const proxyTarget = resolveProxyUrl(url);
-              if (typeof args[0] === 'string') {
-                args[0] = proxyTarget;
-              } else if (args[0] && typeof args[0] === 'object') {
-                try { args[0] = new Request(proxyTarget, args[0]); } catch(e) { args[0] = proxyTarget; }
+            window.fetch = async function(input, init) {
+              let url = '';
+              if (typeof input === 'string') {
+                url = input;
+              } else if (input && typeof input === 'object' && input.url) {
+                url = input.url;
+              } else {
+                url = String(input);
               }
-              return rawFetch.apply(this, args);
+
+              const proxyTarget = resolveProxyUrl(url);
+
+              if (typeof input === 'string') {
+                return rawFetch.call(this, proxyTarget, init);
+              } else if (input && typeof input === 'object' && input.url) {
+                try {
+                  const newReq = new Request(proxyTarget, input);
+                  return rawFetch.call(this, newReq, init);
+                } catch(e) {
+                  return rawFetch.call(this, proxyTarget, init || input);
+                }
+              }
+              return rawFetch.call(this, proxyTarget, init);
             };
           }
 
