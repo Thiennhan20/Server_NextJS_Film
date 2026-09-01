@@ -404,10 +404,16 @@ const proxyStream = async (req, res) => {
     if (targetUrl.includes('opensubtitles.org/search/')) {
         const cached = subSearchCache.get(targetUrl);
         if (cached && (Date.now() - cached.time < SUB_CACHE_TTL)) {
-            res.setHeader('Content-Type', cached.contentType);
-            res.setHeader('Access-Control-Allow-Origin', '*');
-            res.setHeader('Cache-Control', 'public, max-age=21600');
-            return res.send(cached.data);
+            const cachedTxt = Buffer.from(cached.data).toString('utf-8').trim();
+            // Automatically purge stale/empty/error cache entries and force fresh retry
+            if (cachedTxt === '[]' || cachedTxt.length <= 2 || cachedTxt.includes('403 Forbidden') || cachedTxt.includes('Just a moment')) {
+                subSearchCache.delete(targetUrl);
+            } else {
+                res.setHeader('Content-Type', cached.contentType);
+                res.setHeader('Access-Control-Allow-Origin', '*');
+                res.setHeader('Cache-Control', 'public, max-age=21600');
+                return res.send(cached.data);
+            }
         }
     }
 
