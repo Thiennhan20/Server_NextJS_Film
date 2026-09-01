@@ -392,6 +392,37 @@ const embedProxy = async (req, res) => {
     }
 };
 
+function assToVtt(assText) {
+    const lines = assText.split(/\r?\n/);
+    const vttLines = ['WEBVTT\n'];
+    for (let line of lines) {
+        if (line.startsWith('Dialogue:')) {
+            const parts = line.substring(9).split(',');
+            if (parts.length >= 10) {
+                const start = parts[1].trim();
+                const end = parts[2].trim();
+                let text = parts.slice(9).join(',').trim();
+                text = text.replace(/\{[^}]+\}/g, '').replace(/\\N/gi, '\n');
+                const fmtTime = (t) => {
+                    const match = t.match(/(\d+):(\d{2}):(\d{2})[.,](\d{2,3})/);
+                    if (!match) return t;
+                    const h = match[1].padStart(2, '0');
+                    const m = match[2];
+                    const s = match[3];
+                    const ms = match[4].padEnd(3, '0');
+                    return `${h}:${m}:${s}.${ms}`;
+                };
+                const vttStart = fmtTime(start);
+                const vttEnd = fmtTime(end);
+                if (text) {
+                    vttLines.push(`${vttStart} --> ${vttEnd}\n${text}\n`);
+                }
+            }
+        }
+    }
+    return vttLines.join('\n');
+}
+
 // VidSrc Stream Proxy
 const proxyStream = async (req, res) => {
     const targetUrl = req.query.url;
@@ -584,9 +615,16 @@ const proxyStream = async (req, res) => {
         }
 
         let dataBuf = Buffer.from(proxyRes.data);
-        const textContent = dataBuf.toString('utf-8');
+        let textContent = dataBuf.toString('utf-8').replace(/^\uFEFF/, '').replace(/^\xEF\xBB\xBF/, '');
 
-        // Patch subtitles.js on-the-fly to filter unsupported .ass/.sub formats, auto-retry next OpenSubtitles result on error, and force fresh IMDB ID, season, episode from api.php
+        // Convert .ass/.ssa subtitles to WebVTT format on-the-fly
+        if (targetUrl.includes('.ass') || targetUrl.includes('.ssa') || textContent.startsWith('[Script Info]') || (textContent.includes('ScriptType:') && textContent.includes('Dialogue:'))) {
+            const convertedVtt = assToVtt(textContent);
+            dataBuf = Buffer.from(convertedVtt, 'utf-8');
+            contentType = 'text/vtt; charset=utf-8';
+        }
+
+        // Patch subtitles.js on-the-fly to filter unsupported binary formats, auto-retry next OpenSubtitles result on error, and force fresh IMDB ID, season, episode from api.php
         if (targetUrl.includes('subtitles.js')) {
             let jsText = textContent;
             jsText = jsText.replace(
@@ -604,7 +642,7 @@ const proxyStream = async (req, res) => {
         if (Array.isArray(data)) {
             data = data.filter(function(s) {
                 var fn = (s.SubFileName || s.MovieReleaseName || s.SubFormat || '').toLowerCase();
-                return !fn.endsWith('.ass') && !fn.endsWith('.sub') && !fn.endsWith('.idx') && s.SubFormat !== 'ass' && s.SubFormat !== 'sub';
+                return !fn.endsWith('.sub') && !fn.endsWith('.idx') && s.SubFormat !== 'sub';
             });
         }`
             ).replace(
