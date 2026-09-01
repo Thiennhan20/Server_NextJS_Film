@@ -501,16 +501,6 @@ const proxyStream = async (req, res) => {
                 bodyBuffer = Buffer.from(querystring.stringify(req.body));
             }
 
-            // If Express didn't parse binary payload (e.g. application/octet-stream), read raw stream
-            if (!bodyBuffer || bodyBuffer.length === 0) {
-                bodyBuffer = await new Promise((resolve) => {
-                    const chunks = [];
-                    req.on('data', chunk => chunks.push(chunk));
-                    req.on('end', () => resolve(Buffer.concat(chunks)));
-                    req.on('error', () => resolve(null));
-                });
-            }
-
             if (bodyBuffer && bodyBuffer.length > 0) {
                 axiosConfig.data = bodyBuffer;
             }

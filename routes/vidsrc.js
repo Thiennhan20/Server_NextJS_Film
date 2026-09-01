@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const vidsrcController = require('../controllers/vidsrcController');
 
+const rawBodyParser = express.raw({ type: '*/*', limit: '15mb' });
+
 router.options('*', (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
@@ -11,6 +13,6 @@ router.options('*', (req, res) => {
 
 router.get('/active-domain', vidsrcController.getActiveDomain);
 router.get('/embed-proxy', vidsrcController.embedProxy);
-router.all('/proxy', vidsrcController.proxyStream);
+router.all('/proxy', rawBodyParser, vidsrcController.proxyStream);
 
 module.exports = router;
