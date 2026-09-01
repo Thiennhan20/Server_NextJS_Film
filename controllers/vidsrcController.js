@@ -327,7 +327,13 @@ const embedProxy = async (req, res) => {
               _hookedSetup = true;
               var origSetup = window.JWSubs.setup;
               window.JWSubs.setup = function(data) {
+                if (data && data.imdb_id && window.SUB) {
+                  window.SUB.imdbId = String(data.imdb_id).replace(/^tt/i, '');
+                }
                 var res = origSetup.apply(this, arguments);
+                if (data && data.imdb_id && window.SUB) {
+                  window.SUB.imdbId = String(data.imdb_id).replace(/^tt/i, '');
+                }
                 setTimeout(function() {
                   try {
                     if (window.JWSubs && typeof window.JWSubs.auto === 'function') {
@@ -558,10 +564,13 @@ const proxyStream = async (req, res) => {
         let dataBuf = Buffer.from(proxyRes.data);
         const textContent = dataBuf.toString('utf-8');
 
-        // Patch subtitles.js on-the-fly to filter unsupported .ass/.sub formats and auto-retry next OpenSubtitles result on error
+        // Patch subtitles.js on-the-fly to filter unsupported .ass/.sub formats, auto-retry next OpenSubtitles result on error, and force fresh IMDB ID from api.php
         if (targetUrl.includes('subtitles.js')) {
             let jsText = textContent;
             jsText = jsText.replace(
+                "var imdb = CONFIG.imdb || d.imdb_id || '';",
+                "var imdb = d.imdb_id || CONFIG.imdb || '';"
+            ).replace(
                 "searchOS(lang).then(function (data) {",
                 `searchOS(lang).then(function (data) {
         if (Array.isArray(data)) {
