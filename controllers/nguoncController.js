@@ -131,6 +131,8 @@ const embedProxy = async (req, res) => {
         html = html.replace(/<script[^>]*beacon\.min\.js[\s\S]*?<\/script>/gi, '');
         html = html.replace(/_wau\.push\([\s\S]*?\);/gi, '');
         html = html.replace(/onerror="[^"]*blockPlayer[^"]*"/gi, '');
+        html = html.replace(/location\.reload\(\)/gi, 'console.log("[Anti-Devtools] Bypassed location.reload")');
+        html = html.replace(/typeof\s+devtoolsDetector\s*===\s*["']undefined["']/gi, 'false');
 
         // 2. Let StreamC detect device natively (isApple = true on iOS/Mac for native HLS, false on Chrome for Hls.js MSE)
 
@@ -151,6 +153,12 @@ const embedProxy = async (req, res) => {
         (function() {
           const originUrl = "${embedOrigin}";
           const localServerOrigin = "${serverOrigin}";
+
+          window.devtoolsDetector = {
+            launch: function() {},
+            addListener: function() {},
+            isPlugin: false
+          };
 
           function resolveProxyUrl(rawUrl) {
             if (!rawUrl || typeof rawUrl !== 'string') return rawUrl;
