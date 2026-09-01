@@ -628,12 +628,17 @@ const proxyStream = async (req, res) => {
         res.setHeader('Accept-Ranges', 'bytes');
         res.setHeader('Cache-Control', 'no-store');
 
-        if (targetUrl.includes('opensubtitles.org/search/') && proxyRes.status === 200 && dataBuf.length > 2) {
-            subSearchCache.set(targetUrl, {
-                data: dataBuf,
-                contentType: contentType,
-                time: Date.now()
-            });
+        if (targetUrl.includes('opensubtitles.org/search/') && proxyRes.status === 200) {
+            try {
+                const parsedArr = JSON.parse(textContent);
+                if (Array.isArray(parsedArr) && parsedArr.length > 0) {
+                    subSearchCache.set(targetUrl, {
+                        data: dataBuf,
+                        contentType: contentType,
+                        time: Date.now()
+                    });
+                }
+            } catch(e) {}
         }
 
         res.status(proxyRes.status).send(dataBuf);
