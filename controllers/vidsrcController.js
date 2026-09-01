@@ -94,8 +94,9 @@ const embedProxy = async (req, res) => {
         html = html.replace(/VS_EXPIRED/g, 'NO_EXPIRED');
 
         const embedOrigin = parsed.origin;
-        const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'http';
+        const rawProto = (req.headers['x-forwarded-proto'] || req.protocol || 'http').toString();
         const host = req.get('host') || 'localhost:3001';
+        const protocol = (rawProto.includes('https') || host.includes('onrender.com')) ? 'https' : 'http';
         const serverOrigin = `${protocol}://${host}`;
 
         const monitorScript = `
@@ -382,17 +383,22 @@ const proxyStream = async (req, res) => {
             headers: passHeaders,
             responseType: 'arraybuffer',
             timeout: 15000,
-            validateStatus: status => status >= 200 && status < 400
+            validateStatus: () => true
         });
 
-        const contentType = proxyRes.headers['content-type'] || 'application/octet-stream';
+        let contentType = proxyRes.headers['content-type'] || 'application/octet-stream';
+        if (targetUrl.includes('opensubtitles')) {
+            contentType = 'application/json; charset=utf-8';
+        }
+
         let dataBuf = Buffer.from(proxyRes.data);
         const textContent = dataBuf.toString('utf-8');
 
         // M3U8 Playlist Rewriter
         if (textContent.includes('#EXTM3U')) {
-            const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'http';
+            const rawProto = (req.headers['x-forwarded-proto'] || req.protocol || 'http').toString();
             const host = req.get('host') || 'localhost:3001';
+            const protocol = (rawProto.includes('https') || host.includes('onrender.com')) ? 'https' : 'http';
             const serverOrigin = `${protocol}://${host}`;
             const targetBaseUrl = targetUrl.substring(0, targetUrl.lastIndexOf('/') + 1);
 
@@ -438,7 +444,7 @@ const proxyStream = async (req, res) => {
         if (proxyRes.headers['content-range']) {
             res.setHeader('Content-Range', proxyRes.headers['content-range']);
         }
-        if (proxyRes.headers['content-length']) {
+        if (proxyRes.headers['content-length'] && !textContent.includes('#EXTM3U')) {
             res.setHeader('Content-Length', proxyRes.headers['content-length']);
         }
 
