@@ -268,6 +268,36 @@ const embedProxy = async (req, res) => {
               return rawOpen.apply(this, [method, proxyTarget].concat(restArgs));
             };
           }
+
+          // iOS Safari native HLS: intercept video.src and source.src so that
+          // M3U8 URLs go through the proxy (which adds correct Referer/Origin
+          // and rewrites segment URLs). Without this, iOS AVPlayer requests CDN
+          // URLs directly with the proxy domain as Referer, causing the CDN to
+          // reject the request.
+          try {
+            const vidSrcDesc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src')
+                            || Object.getOwnPropertyDescriptor(HTMLVideoElement.prototype, 'src');
+            if (vidSrcDesc && vidSrcDesc.set) {
+              Object.defineProperty(HTMLMediaElement.prototype, 'src', {
+                get: vidSrcDesc.get,
+                set: function(val) {
+                  if (val && typeof val === 'string' && (val.includes('.m3u8') || val.includes('/pl/'))) {
+                    val = resolveProxyUrl(val);
+                  }
+                  return vidSrcDesc.set.call(this, val);
+                },
+                configurable: true
+              });
+            }
+            // Also intercept setAttribute('src', ...) on video elements
+            const origVidSetAttr = HTMLMediaElement.prototype.setAttribute;
+            HTMLMediaElement.prototype.setAttribute = function(name, val) {
+              if (String(name).toLowerCase() === 'src' && val && typeof val === 'string' && (val.includes('.m3u8') || val.includes('/pl/'))) {
+                val = resolveProxyUrl(val);
+              }
+              return origVidSetAttr.call(this, name, val);
+            };
+          } catch(e) {}
         })();
         </script>
         `;
