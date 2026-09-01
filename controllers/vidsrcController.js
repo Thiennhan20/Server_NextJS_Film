@@ -26,7 +26,7 @@ const getActiveDomain = async (req, res) => {
     }
 };
 
-const VIDSRC_WHITELIST_PATTERN = /(?:localhost|127\.0\.0\.1|vidsrcme\.su|vidsrc\.[a-z0-9-]+|cloudorchestranova\.com|vidsrcme\.ru|vidapi\.cloud|comityofcognomen\.site|epexegesisengine\.site|propinquitypostulate\.website|ataraxiaoftheapex\.space|\.site|\.website|\.space|\.online|\.tech|\.store|\.fun|\.xyz|\.top|\.live|\.stream|\.cloud|tmdb\.org|themoviedb\.org|opensubtitles\.org|opensubtitles\.com|jwplayer\.com|jwpcdn\.com|cloudflare\.com|jsdelivr\.net)/i;
+const VIDSRC_WHITELIST_PATTERN = /(?:localhost|127\.0\.0\.1|vidsrcme\.su|vidsrc\.[a-z0-9-]+|cloudorchestranova\.com|vidsrcme\.ru|vidapi\.cloud|comityofcognomen\.site|epexegesisengine\.site|propinquitypostulate\.website|ataraxiaoftheapex\.space|vercel\.app|onrender\.com|\.site|\.website|\.space|\.online|\.tech|\.store|\.fun|\.xyz|\.top|\.live|\.stream|\.cloud|tmdb\.org|themoviedb\.org|opensubtitles\.org|opensubtitles\.com|subscene\.com|osdb\.link|subdl\.com|statically\.io|cloudfront\.net|fastly\.net|jwplayer\.com|jwpcdn\.com|cloudflare\.com|jsdelivr\.net)/i;
 
 // VidSrc Embed Proxy (Ad-blocking, Whitelist, Referer Bypassing)
 const embedProxy = async (req, res) => {
