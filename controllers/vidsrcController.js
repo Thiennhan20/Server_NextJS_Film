@@ -303,17 +303,33 @@ const embedProxy = async (req, res) => {
             };
           } catch(e) {}
 
-          // Auto-trigger subtitle loading after player is ready
-          var _subsTried = false;
-          function tryAutoSubs() {
-            if (_subsTried) return;
+          // ═══════════════════════════════════════════════════════════════
+          // Auto-trigger subtitle loading: Hook into JWSubs.setup so
+          // auto() runs immediately after player receives IMDB ID from API
+          // ═══════════════════════════════════════════════════════════════
+          var _hookedSetup = false;
+          function hookJWSubs() {
+            if (window.JWSubs && window.JWSubs.setup && !_hookedSetup) {
+              _hookedSetup = true;
+              var origSetup = window.JWSubs.setup;
+              window.JWSubs.setup = function(data) {
+                var res = origSetup.apply(this, arguments);
+                setTimeout(function() {
+                  try {
+                    if (window.JWSubs && typeof window.JWSubs.auto === 'function') {
+                      window.JWSubs.auto();
+                    }
+                  } catch(e) {}
+                }, 300);
+                return res;
+              };
+            }
             if (window.JWSubs && typeof window.JWSubs.auto === 'function') {
-              _subsTried = true;
-              window.JWSubs.auto();
+              try { window.JWSubs.auto(); } catch(e) {}
             }
           }
-          setTimeout(tryAutoSubs, 4000);
-          setTimeout(tryAutoSubs, 8000);
+          var _hookInterval = setInterval(hookJWSubs, 1000);
+          setTimeout(function() { clearInterval(_hookInterval); }, 15000);
         })();
         </script>
         `;
