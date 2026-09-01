@@ -436,13 +436,30 @@ const proxyStream = async (req, res) => {
             validateStatus: () => true
         };
 
-        // Forward request body for POST/PUT requests (needed for cache.php & cache-vtt.php)
-        if (req.method && req.method !== 'GET' && req.method !== 'HEAD' && req.body) {
-            if (Buffer.isBuffer(req.body) || typeof req.body === 'string') {
-                axiosConfig.data = req.body;
-            } else if (typeof req.body === 'object' && Object.keys(req.body).length > 0) {
+        // Forward request body for POST/PUT requests (needed for cache.php & cache-vtt.php binary payloads)
+        if (req.method && req.method !== 'GET' && req.method !== 'HEAD') {
+            let bodyBuffer = null;
+            if (Buffer.isBuffer(req.body)) {
+                bodyBuffer = req.body;
+            } else if (typeof req.body === 'string') {
+                bodyBuffer = Buffer.from(req.body);
+            } else if (typeof req.body === 'object' && req.body !== null && Object.keys(req.body).length > 0) {
                 const querystring = require('querystring');
-                axiosConfig.data = querystring.stringify(req.body);
+                bodyBuffer = Buffer.from(querystring.stringify(req.body));
+            }
+
+            // If Express didn't parse binary payload (e.g. application/octet-stream), read raw stream
+            if (!bodyBuffer || bodyBuffer.length === 0) {
+                bodyBuffer = await new Promise((resolve) => {
+                    const chunks = [];
+                    req.on('data', chunk => chunks.push(chunk));
+                    req.on('end', () => resolve(Buffer.concat(chunks)));
+                    req.on('error', () => resolve(null));
+                });
+            }
+
+            if (bodyBuffer && bodyBuffer.length > 0) {
+                axiosConfig.data = bodyBuffer;
             }
         }
 
