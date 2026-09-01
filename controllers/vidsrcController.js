@@ -516,7 +516,49 @@ const proxyStream = async (req, res) => {
             }
         }
 
-        const proxyRes = await axios(axiosConfig);
+        let proxyRes = null;
+
+        if (targetUrl.includes('opensubtitles')) {
+            const osUAs = [
+                'TemporaryUserAgent',
+                'VLSub 0.10.2',
+                'OpenSubtitlesPlayer v4.7',
+                'trailers.to-UA',
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
+            ];
+
+            for (const ua of osUAs) {
+                const cleanHeaders = {
+                    'User-Agent': ua,
+                    'X-User-Agent': ua,
+                    'Accept': '*/*',
+                    'Accept-Language': 'en-US,en;q=0.9,vi;q=0.8'
+                };
+                const cfg = {
+                    method: req.method || 'GET',
+                    url: targetUrl,
+                    headers: cleanHeaders,
+                    responseType: 'arraybuffer',
+                    timeout: 10000,
+                    validateStatus: () => true
+                };
+                try {
+                    const r = await axios(cfg);
+                    if (r.status === 200 && r.data && r.data.length > 2) {
+                        const txt = Buffer.from(r.data).toString('utf-8');
+                        if (!txt.includes('Just a moment') && !txt.includes('403 Forbidden')) {
+                            console.log(`[vidsrc-proxy] ✅ OpenSubtitles success with UA: ${ua}`);
+                            proxyRes = r;
+                            break;
+                        }
+                    }
+                } catch(e) {}
+            }
+        }
+
+        if (!proxyRes) {
+            proxyRes = await axios(axiosConfig);
+        }
 
         let contentType = proxyRes.headers['content-type'] || 'application/octet-stream';
         if (targetUrl.includes('opensubtitles') && contentType.includes('text/html')) {
