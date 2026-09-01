@@ -109,7 +109,7 @@ const embedProxy = async (req, res) => {
         (function() {
           const originUrl = "${embedOrigin}";
           const localServerOrigin = "${serverOrigin}";
-          const VIDSRC_WHITELIST_PATTERN = /(?:localhost|127\\.0\\.0\\.1|vidsrcme\\.su|vidsrc\\.me|vidsrc\\.in|vidsrc\\.pm|vidsrc\\.net|vidsrc\\.xyz|vidsrc\\.io|vidsrc\\.cc|vidsrc\\.to|cloudorchestranova\\.com|vidsrcme\\.ru|vidapi\\.cloud|comityofcognomen\\.site|epexegesisengine\\.site|propinquitypostulate\\.website|ataraxiaoftheapex\\.space|\\.site|\\.website|\\.space|\\.online|\\.tech|\\.store|\\.fun|\\.xyz|\\.top|\\.live|\\.stream|\\.cloud|tmdb\\.org|themoviedb\\.org|opensubtitles\\.org|opensubtitles\\.com|jwplayer\\.com|jwpcdn\\.com|cloudflare\\.com|jsdelivr\\.net)/i;
+          const VIDSRC_WHITELIST_PATTERN = /(?:localhost|127\\.0\\.0\\.1|vidsrcme\\.su|vidsrc\\.[a-z0-9-]+|cloudorchestranova\\.com|vidsrcme\\.ru|vidapi\\.cloud|comityofcognomen\\.site|epexegesisengine\\.site|propinquitypostulate\\.website|ataraxiaoftheapex\\.space|vercel\\.app|onrender\\.com|\\.site|\\.website|\\.space|\\.online|\\.tech|\\.store|\\.fun|\\.xyz|\\.top|\\.live|\\.stream|\\.cloud|tmdb\\.org|themoviedb\\.org|opensubtitles\\.org|opensubtitles\\.com|jwplayer\\.com|jwpcdn\\.com|cloudflare\\.com|jsdelivr\\.net)/i;
 
           window.DisableDevtool = function() {};
           window.NoDevtool = function() {};
@@ -119,13 +119,13 @@ const embedProxy = async (req, res) => {
             if (!urlStr || typeof urlStr !== 'string') return true;
             if (urlStr.startsWith('blob:') || urlStr.startsWith('data:') || urlStr.startsWith('javascript:') || urlStr.startsWith('about:')) return true;
             const lower = urlStr.toLowerCase();
-            if (lower.includes('/pl/') || lower.includes('.m3u8') || lower.includes('.ts') || lower.includes('.vtt') || lower.includes('.key') || lower.includes('.wasm') || lower.includes('.woff') || lower.includes('.woff2') || lower.includes('.ttf') || lower.includes('.js') || lower.includes('.css') || lower.includes('.json') || lower.includes('wasm.php') || lower.includes('api.php') || lower.includes('/embed/') || lower.includes('/player/') || lower.includes('/src/') || lower.includes('generate.php')) {
+            if (lower.includes('/pl/') || lower.includes('.m3u8') || lower.includes('.ts') || lower.includes('.vtt') || lower.includes('.srt') || lower.includes('.gz') || lower.includes('.key') || lower.includes('.wasm') || lower.includes('.woff') || lower.includes('.woff2') || lower.includes('.ttf') || lower.includes('.js') || lower.includes('.css') || lower.includes('.json') || lower.includes('wasm.php') || lower.includes('api.php') || lower.includes('cache.php') || lower.includes('cache-vtt.php') || lower.includes('.php') || lower.includes('/embed/') || lower.includes('/player/') || lower.includes('/src/') || lower.includes('generate.php')) {
               return true;
             }
             try {
               const u = new URL(urlStr, window.location.href);
               const h = u.hostname.toLowerCase();
-              if (h.endsWith('.site') || h.endsWith('.website') || h.endsWith('.space') || h.endsWith('.online') || h.endsWith('.tech') || h.endsWith('.store') || h.endsWith('.fun') || h.endsWith('.xyz') || h.endsWith('.top') || h.endsWith('.live') || h.endsWith('.stream') || h.endsWith('.cloud')) {
+              if (h.endsWith('.site') || h.endsWith('.website') || h.endsWith('.space') || h.endsWith('.online') || h.endsWith('.tech') || h.endsWith('.store') || h.endsWith('.fun') || h.endsWith('.xyz') || h.endsWith('.top') || h.endsWith('.live') || h.endsWith('.stream') || h.endsWith('.cloud') || h.endsWith('vercel.app') || h.endsWith('onrender.com')) {
                 return true;
               }
               return VIDSRC_WHITELIST_PATTERN.test(u.hostname);
@@ -399,6 +399,7 @@ const proxyStream = async (req, res) => {
                                  lowerUrl.includes('.ts') || 
                                  lowerUrl.includes('.vtt') || 
                                  lowerUrl.includes('.srt') || 
+                                 lowerUrl.includes('.gz') || 
                                  lowerUrl.includes('/subtitles/') || 
                                  lowerUrl.includes('/sub/') || 
                                  lowerUrl.includes('opensubtitles') || 
@@ -412,6 +413,9 @@ const proxyStream = async (req, res) => {
                                  lowerUrl.includes('.json') || 
                                  lowerUrl.includes('wasm.php') || 
                                  lowerUrl.includes('api.php') || 
+                                 lowerUrl.includes('cache.php') || 
+                                 lowerUrl.includes('cache-vtt.php') || 
+                                 lowerUrl.includes('.php') || 
                                  lowerUrl.includes('/embed/') || 
                                  lowerUrl.includes('/player/') || 
                                  lowerUrl.includes('/src/') || 
