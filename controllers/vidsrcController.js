@@ -300,30 +300,21 @@ const embedProxy = async (req, res) => {
           } catch(e) {}
 
           // ═══════════════════════════════════════════════════════════════
-          // Ad Overlay Cleanup — neutralize transparent click-jacking divs
-          // that VidSrc places on top of player controls (Play, CC, etc.)
+          // Ad Overlay Cleanup — ONLY target obvious click-jacking overlays
+          // outside the player. Never touch anything inside #player.
           // ═══════════════════════════════════════════════════════════════
-          function isPlayerUI(el) {
-            if (!el || el.nodeType !== 1) return true;
-            var tag = el.tagName;
-            if (tag === 'VIDEO' || tag === 'CANVAS' || tag === 'STYLE' || tag === 'SCRIPT' || tag === 'LINK' || tag === 'META' || tag === 'BASE') return true;
-            var id = el.id || '';
-            if (id === 'player' || id === 'vid' || id === 'controls' || id === 'poster' || id === 'title' || id === 'error' || id === 'upnext' || id === 'seek' || id === 'player_frame' || id === 'subText') return true;
-            var cls = (typeof el.className === 'string') ? el.className : '';
-            if (cls.indexOf('jw') !== -1 || cls.indexOf('cc-') !== -1 || cls.indexOf('sub') !== -1) return true;
-            if (el.closest && (el.closest('#player') || el.closest('#controls') || el.closest('.jw-controls') || el.closest('.jw-center') || el.closest('.jw-upnext') || el.closest('#subText'))) {
-              if (cls.indexOf('jw') !== -1 || tag === 'BUTTON' || tag === 'INPUT' || tag === 'SELECT' || tag === 'SVG' || tag === 'PATH' || tag === 'SPAN' || tag === 'LABEL') return true;
-            }
-            return false;
-          }
-
           function cleanOverlays() {
-            var all = document.querySelectorAll('body > div, body > a, body > iframe, #player > div, #player > a');
+            // Only target direct children of <body> — never inside #player
+            var all = document.querySelectorAll('body > div, body > a, body > iframe');
             for (var i = 0; i < all.length; i++) {
               var el = all[i];
-              if (isPlayerUI(el)) continue;
-              // Remove rogue iframes that aren't the player frame
-              if (el.tagName === 'IFRAME' && el.id !== 'player_frame') {
+              var id = el.id || '';
+              // Never touch the player container or known UI elements
+              if (id === 'player' || id === 'player_frame' || id === 'controls') continue;
+              var cls = (typeof el.className === 'string') ? el.className : '';
+              if (cls.indexOf('jw') !== -1 || cls.indexOf('cc-') !== -1) continue;
+              // Remove rogue iframes (ad frames)
+              if (el.tagName === 'IFRAME' && id !== 'player_frame') {
                 el.style.display = 'none';
                 try { el.remove(); } catch(e) {}
                 continue;
@@ -332,62 +323,53 @@ const embedProxy = async (req, res) => {
               var pos = cs.position;
               if (pos !== 'absolute' && pos !== 'fixed') continue;
               var rect = el.getBoundingClientRect();
-              if (rect.width < 50 || rect.height < 50) continue;
-              var z = parseInt(cs.zIndex) || 0;
+              if (rect.width < 100 || rect.height < 100) continue;
               var op = parseFloat(cs.opacity);
-              // Large positioned overlay with high z-index or transparent
-              var isLarge = (rect.width >= window.innerWidth * 0.3 && rect.height >= window.innerHeight * 0.3);
-              var isSuspect = (z >= 5 || op <= 0.15 || isLarge);
-              if (isSuspect) {
+              var z = parseInt(cs.zIndex) || 0;
+              var childCount = el.querySelectorAll('*').length;
+              // Only kill truly invisible overlays: opacity 0, or very high z-index 
+              // with no meaningful children (empty click-jacking divs)
+              if (op <= 0.01 || (z >= 999 && childCount <= 2)) {
                 el.style.setProperty('pointer-events', 'none', 'important');
-                el.style.setProperty('opacity', '0', 'important');
                 el.style.setProperty('display', 'none', 'important');
               }
             }
           }
 
-          // MutationObserver: real-time detection of newly injected ad overlays
+          // MutationObserver: only for body-level ad injections
           var _adObserver = new MutationObserver(function(muts) {
             for (var m = 0; m < muts.length; m++) {
               var added = muts[m].addedNodes;
               for (var n = 0; n < added.length; n++) {
                 var node = added[n];
                 if (node.nodeType !== 1) continue;
-                if (isPlayerUI(node)) continue;
-                if (node.tagName === 'IFRAME' && node.id !== 'player_frame') {
+                // Only act on direct children of body
+                if (node.parentNode !== document.body) continue;
+                var nid = node.id || '';
+                if (nid === 'player' || nid === 'player_frame') continue;
+                var ncls = (typeof node.className === 'string') ? node.className : '';
+                if (ncls.indexOf('jw') !== -1) continue;
+                // Remove ad iframes
+                if (node.tagName === 'IFRAME' && nid !== 'player_frame') {
                   node.style.display = 'none';
                   try { node.remove(); } catch(e) {}
                   continue;
                 }
+                // Remove _blank ad links
                 if (node.tagName === 'A' && node.target === '_blank') {
                   node.style.setProperty('pointer-events', 'none', 'important');
                   node.style.setProperty('display', 'none', 'important');
                   continue;
                 }
-                // Defer style check (element may not be rendered yet)
-                (function(el) {
-                  setTimeout(function() {
-                    try {
-                      var cs = window.getComputedStyle(el);
-                      if (cs.position === 'absolute' || cs.position === 'fixed') {
-                        var r = el.getBoundingClientRect();
-                        if (r.width >= 50 && r.height >= 50) {
-                          el.style.setProperty('pointer-events', 'none', 'important');
-                          el.style.setProperty('display', 'none', 'important');
-                        }
-                      }
-                    } catch(e) {}
-                  }, 50);
-                })(node);
               }
             }
           });
 
           function startCleaner() {
-            var target = document.body || document.documentElement;
-            _adObserver.observe(target, { childList: true, subtree: true });
+            if (!document.body) return;
+            _adObserver.observe(document.body, { childList: true });
             cleanOverlays();
-            setInterval(cleanOverlays, 2000);
+            setInterval(cleanOverlays, 3000);
           }
           if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', startCleaner);
@@ -397,7 +379,6 @@ const embedProxy = async (req, res) => {
 
           // ═══════════════════════════════════════════════════════════════
           // Auto-trigger subtitle loading after player is ready
-          // (safety net so subs load even if CC button click was blocked)
           // ═══════════════════════════════════════════════════════════════
           var _subsTried = false;
           function tryAutoSubs() {
