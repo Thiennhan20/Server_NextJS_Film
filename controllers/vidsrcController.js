@@ -115,6 +115,12 @@ const embedProxy = async (req, res) => {
           window.NoDevtool = function() {};
           window.devtoolsDetector = { launch: function() {}, addListener: function() {}, isPlugin: false };
 
+          try {
+            for (var k in localStorage) {
+              if (k && k.indexOf('va_subtitle_') === 0) localStorage.removeItem(k);
+            }
+          } catch(e) {}
+
           function isAllowedDomain(urlStr) {
             if (!urlStr || typeof urlStr !== 'string') return true;
             if (urlStr.startsWith('blob:') || urlStr.startsWith('data:') || urlStr.startsWith('javascript:') || urlStr.startsWith('about:')) return true;
