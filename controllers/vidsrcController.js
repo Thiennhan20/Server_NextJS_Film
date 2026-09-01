@@ -409,7 +409,9 @@ const proxyStream = async (req, res) => {
             'Accept-Language': 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
         };
 
-        if (!targetUrl.includes('opensubtitles')) {
+        if (targetUrl.includes('opensubtitles')) {
+            passHeaders['X-User-Agent'] = req.headers['x-user-agent'] || 'trailers.to-UA';
+        } else {
             passHeaders['Referer'] = refUrl;
             passHeaders['Origin'] = originUrlStr;
             passHeaders['Sec-Ch-Ua'] = '"Google Chrome";v="125", "Chromium";v="125", "Not.A/Brand";v="24"';
@@ -417,19 +419,37 @@ const proxyStream = async (req, res) => {
             passHeaders['Sec-Ch-Ua-Platform'] = '"Windows"';
         }
 
+        if (req.headers['content-type']) {
+            passHeaders['Content-Type'] = req.headers['content-type'];
+        }
+
         if (req.headers['range']) {
             passHeaders['Range'] = req.headers['range'];
         }
 
-        const proxyRes = await axios.get(targetUrl, {
+        const axiosConfig = {
+            method: req.method || 'GET',
+            url: targetUrl,
             headers: passHeaders,
             responseType: 'arraybuffer',
             timeout: 15000,
             validateStatus: () => true
-        });
+        };
+
+        // Forward request body for POST/PUT requests (needed for cache.php & cache-vtt.php)
+        if (req.method && req.method !== 'GET' && req.method !== 'HEAD' && req.body) {
+            if (Buffer.isBuffer(req.body) || typeof req.body === 'string') {
+                axiosConfig.data = req.body;
+            } else if (typeof req.body === 'object' && Object.keys(req.body).length > 0) {
+                const querystring = require('querystring');
+                axiosConfig.data = querystring.stringify(req.body);
+            }
+        }
+
+        const proxyRes = await axios(axiosConfig);
 
         let contentType = proxyRes.headers['content-type'] || 'application/octet-stream';
-        if (targetUrl.includes('opensubtitles')) {
+        if (targetUrl.includes('opensubtitles') && contentType.includes('text/html')) {
             contentType = 'application/json; charset=utf-8';
         }
 
