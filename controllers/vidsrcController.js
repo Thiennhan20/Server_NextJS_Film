@@ -446,9 +446,13 @@ const proxyStream = async (req, res) => {
             originUrlStr = 'https://cloudorchestranova.com';
         }
 
+        if (targetUrl.includes('opensubtitles') || targetUrl.includes('cache.php') || targetUrl.includes('.vtt') || targetUrl.includes('subtitles.js')) {
+            console.log(`[vidsrc-proxy] 🎬 Subtitle Resource (${req.method}): ${targetUrl}`);
+        }
+
         const passHeaders = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-            'Accept': targetUrl.includes('opensubtitles') ? 'application/json, text/plain, */*' : '*/*',
+            'Accept': '*/*',
             'Accept-Language': 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
             'Referer': refUrl,
             'Origin': originUrlStr,
