@@ -1,6 +1,10 @@
 const mongoose = require('mongoose');
 const axios = require('axios');
 
+// In-memory cache for OpenSubtitles search results to prevent Render IP rate limits
+const subSearchCache = new Map();
+const SUB_CACHE_TTL = 6 * 60 * 60 * 1000; // 6 hours
+
 // Controller: Simply return the active VidSrc domain configured by Django Admin
 const getActiveDomain = async (req, res) => {
     try {
@@ -22,7 +26,7 @@ const getActiveDomain = async (req, res) => {
     }
 };
 
-const VIDSRC_WHITELIST_PATTERN = /(?:localhost|127\.0\.0\.1|vidsrcme\.su|vidsrc\.me|vidsrc\.in|vidsrc\.pm|vidsrc\.net|vidsrc\.xyz|vidsrc\.io|vidsrc\.cc|vidsrc\.to|cloudorchestranova\.com|vidsrcme\.ru|vidapi\.cloud|comityofcognomen\.site|epexegesisengine\.site|propinquitypostulate\.website|ataraxiaoftheapex\.space|\.site|\.website|\.space|\.online|\.tech|\.store|\.fun|\.xyz|\.top|\.live|\.stream|\.cloud|tmdb\.org|themoviedb\.org|opensubtitles\.org|opensubtitles\.com|jwplayer\.com|jwpcdn\.com|cloudflare\.com|jsdelivr\.net)/i;
+const VIDSRC_WHITELIST_PATTERN = /(?:localhost|127\.0\.0\.1|vidsrcme\.su|vidsrc\.[a-z0-9-]+|cloudorchestranova\.com|vidsrcme\.ru|vidapi\.cloud|comityofcognomen\.site|epexegesisengine\.site|propinquitypostulate\.website|ataraxiaoftheapex\.space|\.site|\.website|\.space|\.online|\.tech|\.store|\.fun|\.xyz|\.top|\.live|\.stream|\.cloud|tmdb\.org|themoviedb\.org|opensubtitles\.org|opensubtitles\.com|jwplayer\.com|jwpcdn\.com|cloudflare\.com|jsdelivr\.net)/i;
 
 // VidSrc Embed Proxy (Ad-blocking, Whitelist, Referer Bypassing)
 const embedProxy = async (req, res) => {
@@ -36,10 +40,10 @@ const embedProxy = async (req, res) => {
     }
 
     try {
-        // Automatically rewrite Level 1 alternate VidSrc domains (vidsrc.me, vidsrc.io...) to vidsrcme.su (the primary domain that returns 200 OK)
+        // Automatically rewrite Level 1 alternate VidSrc domains (vidsrc.bz, vidsrc.me, vidsrc.io...) to vidsrcme.su (the primary domain that returns 200 OK)
         let targetEmbedUrl = embedUrl;
         if (targetEmbedUrl.includes('/embed/movie') || targetEmbedUrl.includes('/embed/tv')) {
-            targetEmbedUrl = targetEmbedUrl.replace(/https?:\/\/(?:vidsrc\.me|vidsrc\.io|vidsrc\.in|vidsrc\.pm|vidsrc\.net|vidsrc\.xyz|vidsrc\.cc)/i, 'https://vidsrcme.su');
+            targetEmbedUrl = targetEmbedUrl.replace(/https?:\/\/(?:vidsrc\.[a-z0-9-]+|vidsrcme\.su)/i, 'https://vidsrcme.su');
         }
 
         const parsed = new URL(targetEmbedUrl);
@@ -344,6 +348,17 @@ const proxyStream = async (req, res) => {
         return res.status(400).send('Missing url parameter');
     }
 
+    // OpenSubtitles search caching (prevents Render IP rate-limiting)
+    if (targetUrl.includes('opensubtitles.org/search/')) {
+        const cached = subSearchCache.get(targetUrl);
+        if (cached && (Date.now() - cached.time < SUB_CACHE_TTL)) {
+            res.setHeader('Content-Type', cached.contentType);
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            res.setHeader('Cache-Control', 'public, max-age=21600');
+            return res.send(cached.data);
+        }
+    }
+
     try {
         const parsed = new URL(targetUrl);
         const lowerUrl = targetUrl.toLowerCase();
@@ -520,11 +535,12 @@ const proxyStream = async (req, res) => {
         res.setHeader('Accept-Ranges', 'bytes');
         res.setHeader('Cache-Control', 'no-store');
 
-        if (proxyRes.headers['content-range']) {
-            res.setHeader('Content-Range', proxyRes.headers['content-range']);
-        }
-        if (proxyRes.headers['content-length'] && !textContent.includes('#EXTM3U')) {
-            res.setHeader('Content-Length', proxyRes.headers['content-length']);
+        if (targetUrl.includes('opensubtitles.org/search/') && proxyRes.status === 200 && dataBuf.length > 2) {
+            subSearchCache.set(targetUrl, {
+                data: dataBuf,
+                contentType: contentType,
+                time: Date.now()
+            });
         }
 
         res.status(proxyRes.status).send(dataBuf);
