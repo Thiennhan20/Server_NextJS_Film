@@ -416,16 +416,24 @@ const proxyStream = async (req, res) => {
             originUrlStr = 'https://cloudorchestranova.com';
         }
 
+        const OS_USER_AGENTS = [
+            'TemporaryUserAgent',
+            'OSTestUserAgentTemp',
+            'trailers.to-UA',
+            'VLSub 0.10.2',
+            'OpenSubtitlesPlayer v4.7'
+        ];
+
         const passHeaders = {
             'User-Agent': targetUrl.includes('opensubtitles') 
-                ? 'TemporaryUserAgent' 
+                ? OS_USER_AGENTS[0] 
                 : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
             'Accept': '*/*',
             'Accept-Language': 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
         };
 
         if (targetUrl.includes('opensubtitles')) {
-            passHeaders['X-User-Agent'] = req.headers['x-user-agent'] || 'trailers.to-UA';
+            passHeaders['X-User-Agent'] = req.headers['x-user-agent'] || OS_USER_AGENTS[0];
         } else {
             passHeaders['Referer'] = refUrl;
             passHeaders['Origin'] = originUrlStr;
@@ -478,7 +486,22 @@ const proxyStream = async (req, res) => {
             }
         }
 
-        const proxyRes = await axios(axiosConfig);
+        let proxyRes = null;
+        if (targetUrl.includes('opensubtitles')) {
+            for (const ua of OS_USER_AGENTS) {
+                axiosConfig.headers['User-Agent'] = ua;
+                axiosConfig.headers['X-User-Agent'] = ua;
+                proxyRes = await axios(axiosConfig);
+                if (proxyRes.status === 200 && proxyRes.data && proxyRes.data.length > 2) {
+                    break;
+                }
+            }
+            if (!proxyRes) {
+                proxyRes = await axios(axiosConfig);
+            }
+        } else {
+            proxyRes = await axios(axiosConfig);
+        }
 
         let contentType = proxyRes.headers['content-type'] || 'application/octet-stream';
         if (targetUrl.includes('opensubtitles') && contentType.includes('text/html')) {
