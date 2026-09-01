@@ -40,7 +40,10 @@ const embedProxy = async (req, res) => {
     }
 
     try {
-        // Automatically rewrite Level 1 alternate VidSrc domains (vidsrc.bz, vidsrc.me, vidsrc.io...) to vidsrcme.su (the primary domain that returns 200 OK)
+        let targetEmbedUrl = embedUrl;
+        if (targetEmbedUrl.includes('/embed/movie') || targetEmbedUrl.includes('/embed/tv')) {
+            targetEmbedUrl = targetEmbedUrl.replace(/https?:\/\/(?:vidsrc\.[a-z0-9-]+|vidsrcme\.su|vidsrcme\.ru)/i, 'https://vidsrcme.su');
+        }
         // Clean ds_lang parameter if it contains encoded comma (%2C or ,) to avoid Cloudflare 403 Forbidden WAF blocks
         if (targetEmbedUrl.includes('ds_lang=')) {
             targetEmbedUrl = targetEmbedUrl.replace(/ds_lang=([^&]+)/gi, (m, langVal) => {
