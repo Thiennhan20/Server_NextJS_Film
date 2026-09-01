@@ -333,12 +333,16 @@ const embedProxy = async (req, res) => {
               _hookedSetup = true;
               var origSetup = window.JWSubs.setup;
               window.JWSubs.setup = function(data) {
-                if (data && data.imdb_id && window.SUB) {
-                  window.SUB.imdbId = String(data.imdb_id).replace(/^tt/i, '');
+                if (data && window.SUB) {
+                  if (data.imdb_id) window.SUB.imdbId = String(data.imdb_id).replace(/^tt/i, '');
+                  if (data.season) window.SUB.season = parseInt(data.season, 10);
+                  if (data.episode) window.SUB.episode = parseInt(data.episode, 10);
                 }
                 var res = origSetup.apply(this, arguments);
-                if (data && data.imdb_id && window.SUB) {
-                  window.SUB.imdbId = String(data.imdb_id).replace(/^tt/i, '');
+                if (data && window.SUB) {
+                  if (data.imdb_id) window.SUB.imdbId = String(data.imdb_id).replace(/^tt/i, '');
+                  if (data.season) window.SUB.season = parseInt(data.season, 10);
+                  if (data.episode) window.SUB.episode = parseInt(data.episode, 10);
                 }
                 setTimeout(function() {
                   try {
@@ -570,12 +574,18 @@ const proxyStream = async (req, res) => {
         let dataBuf = Buffer.from(proxyRes.data);
         const textContent = dataBuf.toString('utf-8');
 
-        // Patch subtitles.js on-the-fly to filter unsupported .ass/.sub formats, auto-retry next OpenSubtitles result on error, and force fresh IMDB ID from api.php
+        // Patch subtitles.js on-the-fly to filter unsupported .ass/.sub formats, auto-retry next OpenSubtitles result on error, and force fresh IMDB ID, season, episode from api.php
         if (targetUrl.includes('subtitles.js')) {
             let jsText = textContent;
             jsText = jsText.replace(
                 "var imdb = CONFIG.imdb || d.imdb_id || '';",
                 "var imdb = d.imdb_id || CONFIG.imdb || '';"
+            ).replace(
+                "SUB.season = CONFIG.season || (d.season ? parseInt(d.season, 10) : null);",
+                "SUB.season = (d.season ? parseInt(d.season, 10) : null) || CONFIG.season;"
+            ).replace(
+                "SUB.episode = CONFIG.episode || (d.episode ? parseInt(d.episode, 10) : null);",
+                "SUB.episode = (d.episode ? parseInt(d.episode, 10) : null) || CONFIG.episode;"
             ).replace(
                 "searchOS(lang).then(function (data) {",
                 `searchOS(lang).then(function (data) {
