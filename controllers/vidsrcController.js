@@ -71,9 +71,6 @@ const embedProxy = async (req, res) => {
             refererHeader = 'https://cloudorchestranova.com/';
         }
 
-        console.log(`[vidsrc-embed-proxy] 🌐 Fetching embed: ${targetEmbedUrl}`);
-        console.log(`[vidsrc-embed-proxy] 🔑 Using Referer: ${refererHeader}`);
-
         const embedRes = await axios.get(targetEmbedUrl, {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
@@ -89,7 +86,6 @@ const embedProxy = async (req, res) => {
             responseType: 'text'
         });
 
-        console.log(`[vidsrc-embed-proxy] ✅ Response (200 OK) for: ${targetEmbedUrl}`);
         let html = embedRes.data;
 
         // 1. Remove 46KB outer ad bundle (contains shown_at, unloaded_at, 9662:, etc.)
@@ -114,8 +110,8 @@ const embedProxy = async (req, res) => {
         html = html.replace(/<script[^>]*sbx\.js[^>]*><\/script>/gi, '');
         html = html.replace(/<script[^>]*>(?:(?!<\/script>)[\s\S])*?_Hasync[\s\S]*?<\/script>/gi, '');
         html = html.replace(/<script[^>]*>(?:(?!<\/script>)[\s\S])*?function\s+kill\(\)[\s\S]*?<\/script>/gi, '');
-        html = html.replace(/location\.replace\(['"]about:blank['"]\)/gi, 'console.log("[Anti-Devtools] Bypassed about:blank")');
-        html = html.replace(/document\.documentElement\.innerHTML\s*=\s*['"]['"]/gi, 'console.log("[Anti-Devtools] Bypassed innerHTML clear")');
+        html = html.replace(/location\.replace\(['"]about:blank['"]\)/gi, '/* bypassed */');
+        html = html.replace(/document\.documentElement\.innerHTML\s*=\s*['"]['"]/gi, '/* bypassed */');
         html = html.replace(/DisableDevtool/gi, 'NoDevtool');
         html = html.replace(/disable-devtool/gi, 'no-devtool');
         html = html.replace(/histats/gi, 'nohistats');
@@ -141,15 +137,11 @@ const embedProxy = async (req, res) => {
           const STREAM_TLD_REGEX = /\\.(?:site|website|space|su|ru)$/i;
           const AD_URL_REGEX = /(?:sbx\\.js|\\/embed\\/[a-f0-9]{16,}\\.js|aclib|adcash|popcash|popads|histats|waust|disable-devtool|devtool-guard|adexchangerapid|canoesaisles|groszynudgepreter|glumsynemasmitham|beacon\\.min\\.js|syndication|doubleclick|adnxs|trafficjunky|exoclick|juicyads|clickadu|propellerads|betting|casino)/i;
 
-          console.log('[VidSrc Anti-Ad] 🛡️ Anti-ad & anti-redirect shield initialized');
-          console.log('[VidSrc Subtitle] 🚀 Subtitle subsystem initialized (OpenSubtitles Direct + VTT Proxy)');
-
           // Block location.replace & location.assign ad traps
           try {
             const origLocReplace = window.location.replace;
             window.location.replace = function(u) {
               if (u === 'about:blank' || (typeof u === 'string' && (u.includes('about:blank') || !isAllowedDomain(u)))) {
-                console.warn('[VidSrc Anti-Ad] 🛡️ Neutralized location.replace ad-trap:', u);
                 return;
               }
               return origLocReplace.call(window.location, u);
@@ -157,7 +149,6 @@ const embedProxy = async (req, res) => {
             const origLocAssign = window.location.assign;
             window.location.assign = function(u) {
               if (typeof u === 'string' && !isAllowedDomain(u)) {
-                console.warn('[VidSrc Anti-Ad] 🛡️ Neutralized location.assign ad-trap:', u);
                 return;
               }
               return origLocAssign ? origLocAssign.call(window.location, u) : undefined;
@@ -177,7 +168,6 @@ const embedProxy = async (req, res) => {
           function isAllowedDomain(urlStr) {
             if (!urlStr || typeof urlStr !== 'string') return true;
             if (AD_URL_REGEX.test(urlStr)) {
-              console.warn('[VidSrc Anti-Ad] 🚫 Blocked ad URL:', urlStr);
               return false;
             }
             if (urlStr.startsWith('blob:') || urlStr.startsWith('data:') || urlStr.startsWith('javascript:') || urlStr.startsWith('about:')) return true;
@@ -187,11 +177,7 @@ const embedProxy = async (req, res) => {
               if (STREAM_TLD_REGEX.test(h)) {
                 return true;
               }
-              const allowed = VIDSRC_WHITELIST_PATTERN.test(u.hostname);
-              if (!allowed) {
-                console.warn('[VidSrc Anti-Ad] 🚫 Whitelist rejected ad/tracking domain:', h, 'URL:', urlStr);
-              }
-              return allowed;
+              return VIDSRC_WHITELIST_PATTERN.test(u.hostname);
             } catch(e) {
               return true;
             }
@@ -209,9 +195,7 @@ const embedProxy = async (req, res) => {
             else if (!rawUrl.startsWith('http://') && !rawUrl.startsWith('https://')) absUrl = originUrl + '/' + rawUrl;
 
             const baseOrigin = window.location.origin || localServerOrigin;
-            const finalEmbed = baseOrigin + '/api/vidsrc/embed-proxy?url=' + encodeURIComponent(absUrl) + '&ref=' + encodeURIComponent(originUrl);
-            console.log('[VidSrc Anti-Ad] 🔄 Proxied inner iframe cleanly:', absUrl, '->', finalEmbed);
-            return finalEmbed;
+            return baseOrigin + '/api/vidsrc/embed-proxy?url=' + encodeURIComponent(absUrl) + '&ref=' + encodeURIComponent(originUrl);
           }
 
           try {
@@ -254,7 +238,6 @@ const embedProxy = async (req, res) => {
               const safeListener = function(e) {
                 if (e && e.data) {
                   if (e.data.type === 'VS_DEVTOOLS' || e.data.type === 'NO_DEVTOOLS' || e.data.type === 'VS_EXPIRED') {
-                    console.warn('[VidSrc Anti-Ad] 🛡️ Neutralized session cancellation message:', e.data.type);
                     return;
                   }
                 }
@@ -276,18 +259,13 @@ const embedProxy = async (req, res) => {
             else if (!rawUrl.startsWith('http://') && !rawUrl.startsWith('https://')) absUrl = originUrl + '/' + rawUrl;
 
             if (!isAllowedDomain(absUrl)) {
-              console.warn('[VidSrc Anti-Ad] 🚫 Whitelist blocked ad resource:', absUrl);
               return 'data:text/javascript,/*blocked_by_whitelist*/';
             }
 
             if (absUrl.includes('jwplayer.com') || absUrl.includes('jwpcdn.com') || absUrl.includes('cloudflare.com') || absUrl.includes('jsdelivr.net')) return absUrl;
 
             // CRITICAL: Let OpenSubtitles requests bypass the proxy and go direct from browser.
-            // Data Center IPs (Render/AWS/Vercel) get 403-blocked by OpenSubtitles WAF,
-            // but residential browser IPs work fine. OpenSubtitles has CORS (Access-Control-Allow-Origin: *)
-            // so browser can call directly without proxy.
             if (absUrl.includes('opensubtitles.org') || absUrl.includes('opensubtitles.com')) {
-              console.log('[VidSrc Subtitle] 🚀 Direct browser call to OpenSubtitles (bypassing server proxy):', absUrl);
               return absUrl;
             }
 
@@ -297,7 +275,6 @@ const embedProxy = async (req, res) => {
             if (absUrl.includes(window.location.host) && absUrl.includes('/pl/')) {
               const realPath = absUrl.substring(absUrl.indexOf('/pl/'));
               const realTarget = 'https://comityofcognomen.site' + realPath;
-              console.log('[VidSrc Stream] 🎥 Intercepted local /pl/ request ->', realTarget);
               return baseOrigin + '/api/vidsrc/proxy?url=' + encodeURIComponent(realTarget) + '&ref=https%3A%2F%2Fcloudorchestranova.com';
             }
 
@@ -306,15 +283,11 @@ const embedProxy = async (req, res) => {
               try {
                 const u = new URL(absUrl);
                 const realTarget = originUrl + u.pathname + u.search;
-                console.log('[VidSrc Subtitle] 🔀 Local-relative subtitle endpoint rerouted to origin via proxy:', absUrl, '->', realTarget);
                 return baseOrigin + '/api/vidsrc/proxy?url=' + encodeURIComponent(realTarget) + '&ref=' + encodeURIComponent(originUrl);
               } catch(e) {}
             }
 
             if (absUrl.startsWith('http://') || absUrl.startsWith('https://')) {
-              if (absUrl.includes('/get_sub_url') || absUrl.includes('cache-vtt') || absUrl.includes('subtitles.js') || absUrl.includes('.vtt') || absUrl.includes('.srt') || absUrl.includes('.ass')) {
-                console.log('[VidSrc Subtitle] 🔀 Subtitle asset proxied via server:', absUrl);
-              }
               return baseOrigin + '/api/vidsrc/proxy?url=' + encodeURIComponent(absUrl) + '&ref=' + encodeURIComponent(originUrl);
             }
             return absUrl;
@@ -330,7 +303,6 @@ const embedProxy = async (req, res) => {
             location: { href: 'about:blank', replace: function() {}, assign: function() {} }
           };
           window.open = function(url, target, features) {
-            console.warn('[VidSrc Anti-Ad] 🚫 Blocked popup window.open attempt:', url, 'target:', target);
             return noopWindow;
           };
 
@@ -343,7 +315,6 @@ const embedProxy = async (req, res) => {
                 const origClick = el.click;
                 el.click = function() {
                   if (el.target === '_blank' || !isAllowedDomain(el.href)) {
-                    console.warn('[VidSrc Anti-Ad] 🚫 Blocked fake link click:', el.href);
                     return;
                   }
                   return origClick.call(this);
@@ -358,7 +329,6 @@ const embedProxy = async (req, res) => {
             const origAnchorClick = HTMLAnchorElement.prototype.click;
             HTMLAnchorElement.prototype.click = function() {
               if (this.target === '_blank' || !isAllowedDomain(this.href)) {
-                console.warn('[VidSrc Anti-Ad] 🚫 Blocked programmatic anchor.click():', this.href);
                 return;
               }
               return origAnchorClick.call(this);
@@ -375,7 +345,6 @@ const embedProxy = async (req, res) => {
                     e.preventDefault();
                     e.stopPropagation();
                     e.stopImmediatePropagation();
-                    console.warn('[VidSrc Anti-Ad] 🚫 Intercepted ad navigation (' + e.type + '):', el.href);
                     return false;
                   }
                 }
@@ -401,9 +370,6 @@ const embedProxy = async (req, res) => {
               }
 
               const proxyTarget = resolveProxyUrl(url);
-              if (url.includes('opensubtitles') || url.includes('subtitles') || url.includes('/get_sub_url') || url.includes('.vtt')) {
-                console.log('[VidSrc Subtitle] 🌐 fetch() intercepted:', url, '->', proxyTarget);
-              }
 
               if (typeof input === 'string') {
                 return rawFetch.call(this, proxyTarget, init);
@@ -426,9 +392,6 @@ const embedProxy = async (req, res) => {
               this._origUrl = url;
               const proxyTarget = resolveProxyUrl(url);
               this._proxyUrl = proxyTarget;
-              if (url.includes('opensubtitles') || url.includes('subtitles') || url.includes('/get_sub_url') || url.includes('.vtt') || url.includes('.srt')) {
-                console.log('[VidSrc Subtitle] 🌐 XHR open(' + method + ') intercepted:', url, '->', proxyTarget);
-              }
               const restArgs = Array.prototype.slice.call(arguments, 2);
               return rawOpen.apply(this, [method, proxyTarget].concat(restArgs));
             };
@@ -444,17 +407,7 @@ const embedProxy = async (req, res) => {
               Object.defineProperty(HTMLTrackElement.prototype, 'src', {
                 get: origTrackSrcDesc.get,
                 set: function(val) {
-                  console.log('[VidSrc Subtitle] 🎬 Setting <track src>:', val);
                   const proxied = resolveProxyUrl(val);
-                  if (proxied !== val) {
-                    console.log('[VidSrc Subtitle] 🔀 Proxied <track src> to:', proxied);
-                  }
-                  this.addEventListener('load', function() {
-                    console.log('[VidSrc Subtitle] 🎯 Subtitle track loaded successfully on <video> element!');
-                  }, { once: true });
-                  this.addEventListener('error', function(err) {
-                    console.error('[VidSrc Subtitle] ❌ Subtitle track failed to load on <video> element:', err);
-                  }, { once: true });
                   return origTrackSrcDesc.set.call(this, proxied);
                 },
                 configurable: true
@@ -463,7 +416,6 @@ const embedProxy = async (req, res) => {
             const origTrackSetAttr = HTMLTrackElement.prototype.setAttribute;
             HTMLTrackElement.prototype.setAttribute = function(name, val) {
               if (String(name).toLowerCase() === 'src') {
-                console.log('[VidSrc Subtitle] 🎬 setAttribute("src") on <track>:', val);
                 val = resolveProxyUrl(val);
               }
               return origTrackSetAttr.call(this, name, val);
@@ -479,7 +431,6 @@ const embedProxy = async (req, res) => {
                 get: vidSrcDesc.get,
                 set: function(val) {
                   if (val && typeof val === 'string' && (val.includes('.m3u8') || val.includes('/pl/'))) {
-                    console.log('[VidSrc Player] 🎬 Setting <video src>:', val);
                     val = resolveProxyUrl(val);
                   }
                   return vidSrcDesc.set.call(this, val);
@@ -490,7 +441,6 @@ const embedProxy = async (req, res) => {
             const origVidSetAttr = HTMLMediaElement.prototype.setAttribute;
             HTMLMediaElement.prototype.setAttribute = function(name, val) {
               if (String(name).toLowerCase() === 'src' && val && typeof val === 'string' && (val.includes('.m3u8') || val.includes('/pl/'))) {
-                console.log('[VidSrc Player] 🎬 setAttribute("src") on video:', val);
                 val = resolveProxyUrl(val);
               }
               return origVidSetAttr.call(this, name, val);
@@ -503,15 +453,12 @@ const embedProxy = async (req, res) => {
           function hookJWSubs() {
             if (window.JWSubs && window.JWSubs.setup && !_hookedSetup) {
               _hookedSetup = true;
-              console.log('[VidSrc Subtitle] 📡 JWSubs module detected, attaching setup hook...');
               var origSetup = window.JWSubs.setup;
               window.JWSubs.setup = function(data) {
-                console.log('[VidSrc Subtitle] 📋 JWSubs.setup called with payload:', data);
                 if (data && window.SUB) {
                   if (data.imdb_id) window.SUB.imdbId = String(data.imdb_id).replace(/^tt/i, '');
                   if (data.season) window.SUB.season = parseInt(data.season, 10);
                   if (data.episode) window.SUB.episode = parseInt(data.episode, 10);
-                  console.log('[VidSrc Subtitle] 📋 window.SUB configured:', { imdbId: window.SUB.imdbId, season: window.SUB.season, episode: window.SUB.episode });
                 }
                 var res = origSetup.apply(this, arguments);
                 if (data && window.SUB) {
@@ -522,19 +469,15 @@ const embedProxy = async (req, res) => {
                 setTimeout(function() {
                   try {
                     if (window.JWSubs && typeof window.JWSubs.auto === 'function') {
-                      console.log('[VidSrc Subtitle] ⏳ Triggering JWSubs.auto()...');
                       window.JWSubs.auto();
                     }
-                  } catch(e) {
-                    console.error('[VidSrc Subtitle] ❌ Error in JWSubs.auto():', e);
-                  }
+                  } catch(e) {}
                 }, 300);
                 return res;
               };
             }
             if (window.JWSubs && typeof window.JWSubs.auto === 'function') {
               try {
-                console.log('[VidSrc Subtitle] ⏳ Triggering JWSubs.auto() (interval check)...');
                 window.JWSubs.auto();
               } catch(e) {}
             }
@@ -630,7 +573,6 @@ const proxyStream = async (req, res) => {
                         lowerTarget.includes('propellerads');
 
     if (isAdRequest) {
-        console.warn(`[vidsrc-proxy] 🛑 Hard-blocked ad script/resource: ${targetUrl}`);
         res.setHeader('Content-Type', 'application/javascript');
         res.setHeader('Access-Control-Allow-Origin', '*');
         res.setHeader('Cache-Control', 'public, max-age=86400');
@@ -692,7 +634,6 @@ const proxyStream = async (req, res) => {
                                  (STREAM_TLD_REGEX.test(lowerHost) && (lowerUrl.includes('/pl/') || lowerUrl.includes('.m3u8') || lowerUrl.includes('.ts') || lowerUrl.includes('.key')));
 
         if (!isStreamResource && !VIDSRC_WHITELIST_PATTERN.test(parsed.hostname)) {
-            console.log(`[vidsrc-proxy] 🛡️ Whitelist blocked ad domain: ${parsed.hostname}`);
             res.setHeader('Content-Type', 'application/javascript');
             res.setHeader('Access-Control-Allow-Origin', '*');
             res.setHeader('Cache-Control', 'no-store');
@@ -705,16 +646,6 @@ const proxyStream = async (req, res) => {
         if (targetUrl.includes('cloudorchestranova.com') || targetUrl.includes('vidsrcme.ru') || targetUrl.includes('vidapi.cloud') || isStreamResource) {
             refUrl = 'https://cloudorchestranova.com/';
             originUrlStr = 'https://cloudorchestranova.com';
-        }
-
-        if (targetUrl.includes('opensubtitles')) {
-            console.log(`[vidsrc-proxy] 🔀 Subtitle: OpenSubtitles request -> ${targetUrl}`);
-        } else if (targetUrl.includes('subtitles.js')) {
-            console.log(`[vidsrc-proxy] 🔀 Subtitle: subtitles.js requested, applying on-the-fly patches...`);
-        } else if (targetUrl.includes('/get_sub_url')) {
-            console.log(`[vidsrc-proxy] 🔄 Subtitle: /get_sub_url conversion request (method: ${req.method})`);
-        } else if (targetUrl.includes('cache-vtt') || targetUrl.includes('.vtt') || targetUrl.includes('.srt') || targetUrl.includes('.ass')) {
-            console.log(`[vidsrc-proxy] 📄 Subtitle: fetching subtitle file -> ${targetUrl}`);
         }
 
         const passHeaders = {
@@ -800,7 +731,6 @@ const proxyStream = async (req, res) => {
                     if (r.status === 200 && r.data && r.data.length > 2) {
                         const txt = Buffer.from(r.data).toString('utf-8');
                         if (!txt.includes('Just a moment') && !txt.includes('403 Forbidden')) {
-                            console.log(`[vidsrc-proxy] ✅ OpenSubtitles success with UA: ${ua}`);
                             proxyRes = r;
                             break;
                         }
@@ -828,70 +758,10 @@ const proxyStream = async (req, res) => {
             contentType = 'text/vtt; charset=utf-8';
         }
 
-        // Patch subtitles.js on-the-fly to filter unsupported binary formats, add logging, and ensure robust subtitle loading
+        // Patch subtitles.js on-the-fly to filter unsupported binary formats, ensure robust subtitle loading
         if (targetUrl.includes('subtitles.js')) {
-            console.log(`[vidsrc-proxy] 🔀 Serving and patching subtitles.js for: ${targetUrl}`);
             let jsText = textContent;
-            
-            // 1. Log when OpenSubtitles search is initiated
-            jsText = jsText.replace(
-                "login(callback , imdb, lang_ids = [\"all\"], s = 0, e = 0) {",
-                `login(callback , imdb, lang_ids = ["all"], s = 0, e = 0) {
-        console.log('[VidSrc Subtitle] 🔍 OpenSubtitles search initiated for IMDB:', $("body").data("i"), 'Season:', $("body").data("s"), 'Episode:', $("body").data("e"));`
-            );
-            
-            // 2. Log when OpenSubtitles response is received
-            jsText = jsText.replace(
-                "showOpsLangs();",
-                `console.log('[VidSrc Subtitle] 📥 OpenSubtitles response received:', (data && data.length) ? (data.length + ' subtitles found') : '0 subtitles', 'Languages available:', Object.keys(ops_subs));
-                showOpsLangs();`
-            );
 
-            // 3. Log when user views subtitle list for a specific language
-            jsText = jsText.replace(
-                "function showOpsSubs(subkey){",
-                `function showOpsSubs(subkey){
-    console.log('[VidSrc Subtitle] 📋 Subtitle items displayed for language:', subkey, ops_subs[subkey]);`
-            );
-
-            // 4. Log when user clicks a subtitle to download
-            jsText = jsText.replace(
-                "$(document).on('click', \".subtitles .subtitle\", function() {",
-                `$(document).on('click', ".subtitles .subtitle", function() {
-        console.log('[VidSrc Subtitle] 🖱️ User selected subtitle:', $(this).data("lang"), '(' + $(this).data("subformat") + ') ID:', $(this).data("id"), 'Download URL:', $(this).data("url"));
-        console.log('[VidSrc Subtitle] ⬇️ Downloading subtitle (.gz) via XHR...');`
-            );
-
-            // 5. Log when .gz is downloaded
-            jsText = jsText.replace(
-                "if (xhr.status === 200){",
-                `if (xhr.status === 200){
-                console.log('[VidSrc Subtitle] 📦 Subtitle file (.gz) downloaded successfully (size: ' + (xhr.response ? xhr.response.byteLength : 0) + ' bytes)');
-                console.log('[VidSrc Subtitle] 🔄 Sending .gz to /get_sub_url for VTT conversion...');`
-            );
-
-            // 6. Log when /get_sub_url finishes conversion
-            jsText = jsText.replace(
-                "sub_url = data;",
-                `sub_url = data;
-                    console.log('[VidSrc Subtitle] ✅ /get_sub_url converted VTT URL:', data);`
-            );
-
-            // 7. Log addTextTrack
-            jsText = jsText.replace(
-                "function addTextTrack(sub_data , is_default = true){",
-                `function addTextTrack(sub_data , is_default = true){
-    console.log('[VidSrc Subtitle] 🎬 addTextTrack() adding track to <video>:', sub_data);`
-            );
-
-            // 8. Log track load
-            jsText = jsText.replace(
-                "track.addEventListener(\"load\", function() {",
-                `track.addEventListener("load", function() {
-        console.log('[VidSrc Subtitle] 🎯 Subtitle track loaded and active on <video> element!');`
-            );
-
-            // Older/alternative player replacements:
             jsText = jsText.replace(
                 "var imdb = CONFIG.imdb || d.imdb_id || '';",
                 "var imdb = d.imdb_id || CONFIG.imdb || '';"
@@ -904,7 +774,6 @@ const proxyStream = async (req, res) => {
             ).replace(
                 "searchOS(lang).then(function (data) {",
                 `searchOS(lang).then(function (data) {
-        console.log('[VidSrc Subtitle] 🔍 searchOS() returned:', data ? data.length + ' results' : '0');
         if (Array.isArray(data)) {
             data = data.filter(function(s) {
                 var fn = (s.SubFileName || s.MovieReleaseName || s.SubFormat || '').toLowerCase();
@@ -914,9 +783,7 @@ const proxyStream = async (req, res) => {
             ).replace(
                 "resolveVtt(sub).then(function (url) {",
                 `resolveVtt(sub).then(function (url) {
-            console.log('[VidSrc Subtitle] 🔄 resolveVtt() resolved to:', url);
             if (!url && idx + 1 < SUB.results.length) {
-                console.log('[VidSrc Subtitle] ⚠️ Subtitle failed, trying next result index:', idx + 1);
                 loadResult(idx + 1, silent);
                 return;
             }`
