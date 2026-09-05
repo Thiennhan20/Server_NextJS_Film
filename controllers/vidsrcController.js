@@ -30,8 +30,8 @@ const getActiveDomain = async (req, res) => {
     }
 };
 
-const VIDSRC_WHITELIST_PATTERN = /(?:localhost|127\.0\.0\.1|vidsrcme\.su|vidsrc\.[a-z0-9-]+|cloudorchestranova\.com|vidsrcme\.ru|vidapi\.cloud|comityofcognomen\.site|epexegesisengine\.site|propinquitypostulate\.website|ataraxiaoftheapex\.space|zenithofzircon\.space|onomatopoeiaoverture\.website|vercel\.app|onrender\.com|\.(?:site|website|space|online|tech|store|fun|xyz|top|live|stream|cloud|pro|cc|vip|icu|cfd|sbs|bond|lat|best|mom|pw|me|tv|ws|click|link|info|biz|asia|one|today|rest|download|video|movie|run|app|is|to|io|co|club|work|world|moe|su|ru|sh|li|cx|ag|la|vc|bz|vg|ms|gs|tc|ac|im|gg|in|pm|ai|mobi|nu)|tmdb\.org|themoviedb\.org|opensubtitles\.org|opensubtitles\.com|subscene\.com|osdb\.link|subdl\.com|statically\.io|cloudfront\.net|fastly\.net|jwplayer\.com|jwpcdn\.com|cloudflare\.com|jsdelivr\.net)/i;
-const STREAM_TLD_REGEX = /\.(?:site|website|space|online|tech|store|fun|xyz|top|live|stream|cloud|pro|cc|vip|icu|cfd|sbs|bond|lat|best|mom|pw|me|tv|ws|click|link|info|biz|asia|one|today|rest|download|video|movie|run|app|is|to|io|co|club|work|world|moe|su|ru|sh|li|cx|ag|la|vc|bz|vg|ms|gs|tc|ac|im|gg|in|pm|ai|mobi|nu)$/i;
+const VIDSRC_WHITELIST_PATTERN = /(?:localhost|127\.0\.0\.1|vidsrcme\.su|vidsrc\.[a-z0-9-]+|cloudorchestranova\.com|vidsrcme\.ru|vidapi\.cloud|comityofcognomen\.site|epexegesisengine\.site|propinquitypostulate\.website|ataraxiaoftheapex\.space|zenithofzircon\.space|onomatopoeiaoverture\.website|vercel\.app|onrender\.com|\.(?:site|website|space|su|ru)|tmdb\.org|themoviedb\.org|opensubtitles\.org|opensubtitles\.com|subscene\.com|osdb\.link|subdl\.com|statically\.io|cloudfront\.net|fastly\.net|jwplayer\.com|jwpcdn\.com|cloudflare\.com|jsdelivr\.net|gstatic\.com)/i;
+const STREAM_TLD_REGEX = /\.(?:site|website|space|su|ru)$/i;
 
 // VidSrc Embed Proxy (Ad-blocking, Whitelist, Referer Bypassing)
 const embedProxy = async (req, res) => {
@@ -92,7 +92,14 @@ const embedProxy = async (req, res) => {
         console.log(`[vidsrc-embed-proxy] ✅ Response (200 OK) for: ${targetEmbedUrl}`);
         let html = embedRes.data;
 
-        // Clean known ad scripts & devtool killers safely
+        // 1. Remove 46KB outer ad bundle (contains shown_at, unloaded_at, 9662:, etc.)
+        html = html.replace(/<script[^>]*>(?:(?!<\/script>)[\s\S])*?(?:shown_at|unloaded_at|9662:)[\s\S]*?<\/script>/gi, '');
+
+        // 2. Remove document.write and /embed/[hash].js (635KB Adcash popup script)
+        html = html.replace(/<script[^>]*>[\s\S]*?\/embed\/[a-f0-9]{16,}\.js[\s\S]*?<\/script>/gi, '');
+        html = html.replace(/<script[^>]*>(?:(?!<\/script>)[\s\S])*?document\.write[\s\S]*?<\/script>/gi, '');
+
+        // 3. Remove known ad files & devtool killers safely
         html = html.replace(/<script[^>]*ads\.js[\s\S]*?<\/script>/gi, '');
         html = html.replace(/<script[^>]*devtool-guard[\s\S]*?<\/script>/gi, '');
         html = html.replace(/<script[^>]*disable-devtool[^>]*><\/script>/gi, '');
@@ -105,8 +112,8 @@ const embedProxy = async (req, res) => {
         html = html.replace(/<script[^>]*histats[\s\S]*?<\/script>/gi, '');
         html = html.replace(/<script[^>]*waust[\s\S]*?<\/script>/gi, '');
         html = html.replace(/<script[^>]*sbx\.js[^>]*><\/script>/gi, '');
+        html = html.replace(/<script[^>]*>(?:(?!<\/script>)[\s\S])*?_Hasync[\s\S]*?<\/script>/gi, '');
         html = html.replace(/<script[^>]*>(?:(?!<\/script>)[\s\S])*?function\s+kill\(\)[\s\S]*?<\/script>/gi, '');
-        html = html.replace(/<script[^>]*>(?:(?!<\/script>)[\s\S])*?\/embed\/[a-f0-9]{20,}\.js[\s\S]*?<\/script>/gi, '');
         html = html.replace(/location\.replace\(['"]about:blank['"]\)/gi, 'console.log("[Anti-Devtools] Bypassed about:blank")');
         html = html.replace(/document\.documentElement\.innerHTML\s*=\s*['"]['"]/gi, 'console.log("[Anti-Devtools] Bypassed innerHTML clear")');
         html = html.replace(/DisableDevtool/gi, 'NoDevtool');
@@ -114,6 +121,9 @@ const embedProxy = async (req, res) => {
         html = html.replace(/histats/gi, 'nohistats');
         html = html.replace(/VS_DEVTOOLS/g, 'NO_DEVTOOLS');
         html = html.replace(/VS_EXPIRED/g, 'NO_EXPIRED');
+
+        // 4. Sandbox all iframes inside the embed HTML to prevent child iframes from navigating top or opening popups
+        html = html.replace(/<iframe\b(?![^>]*\bsandbox=)/gi, '<iframe sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"');
 
         const embedOrigin = parsed.origin;
         const rawProto = (req.headers['x-forwarded-proto'] || req.protocol || 'http').toString();
@@ -127,21 +137,30 @@ const embedProxy = async (req, res) => {
         (function() {
           const originUrl = "${embedOrigin}";
           const localServerOrigin = "${serverOrigin}";
-          const VIDSRC_WHITELIST_PATTERN = /(?:localhost|127\\.0\\.0\\.1|vidsrcme\\.su|vidsrc\\.[a-z0-9-]+|cloudorchestranova\\.com|vidsrcme\\.ru|vidapi\\.cloud|comityofcognomen\\.site|epexegesisengine\\.site|propinquitypostulate\\.website|ataraxiaoftheapex\\.space|zenithofzircon\\.space|onomatopoeiaoverture\\.website|vercel\\.app|onrender\\.com|\\.(?:site|website|space|online|tech|store|fun|xyz|top|live|stream|cloud|pro|cc|vip|icu|cfd|sbs|bond|lat|best|mom|pw|me|tv|ws|click|link|info|biz|asia|one|today|rest|download|video|movie|run|app|is|to|io|co|club|work|world|moe|su|ru|sh|li|cx|ag|la|vc|bz|vg|ms|gs|tc|ac|im|gg|in|pm|ai|mobi|nu)|tmdb\\.org|themoviedb\\.org|opensubtitles\\.org|opensubtitles\\.com|subscene\\.com|osdb\\.link|subdl\\.com|statically\\.io|cloudfront\\.net|fastly\\.net|jwplayer\\.com|jwpcdn\\.com|cloudflare\\.com|jsdelivr\\.net)/i;
-          const STREAM_TLD_REGEX = /\\.(?:site|website|space|online|tech|store|fun|xyz|top|live|stream|cloud|pro|cc|vip|icu|cfd|sbs|bond|lat|best|mom|pw|me|tv|ws|click|link|info|biz|asia|one|today|rest|download|video|movie|run|app|is|to|io|co|club|work|world|moe|su|ru|sh|li|cx|ag|la|vc|bz|vg|ms|gs|tc|ac|im|gg|in|pm|ai|mobi|nu)$/i;
+          const VIDSRC_WHITELIST_PATTERN = /(?:localhost|127\\.0\\.0\\.1|vidsrcme\\.su|vidsrc\\.[a-z0-9-]+|cloudorchestranova\\.com|vidsrcme\\.ru|vidapi\\.cloud|comityofcognomen\\.site|epexegesisengine\\.site|propinquitypostulate\\.website|ataraxiaoftheapex\\.space|zenithofzircon\\.space|onomatopoeiaoverture\\.website|vercel\\.app|onrender\\.com|\\.(?:site|website|space|su|ru)|tmdb\\.org|themoviedb\\.org|opensubtitles\\.org|opensubtitles\\.com|subscene\\.com|osdb\\.link|subdl\\.com|statically\\.io|cloudfront\\.net|fastly\\.net|jwplayer\\.com|jwpcdn\\.com|cloudflare\\.com|jsdelivr\\.net|gstatic\\.com)/i;
+          const STREAM_TLD_REGEX = /\\.(?:site|website|space|su|ru)$/i;
+          const AD_URL_REGEX = /(?:sbx\\.js|\\/embed\\/[a-f0-9]{16,}\\.js|aclib|adcash|popcash|popads|histats|waust|disable-devtool|devtool-guard|adexchangerapid|canoesaisles|groszynudgepreter|glumsynemasmitham|beacon\\.min\\.js|syndication|doubleclick|adnxs|trafficjunky|exoclick|juicyads|clickadu|propellerads|betting|casino)/i;
 
           console.log('[VidSrc Anti-Ad] 🛡️ Anti-ad & anti-redirect shield initialized');
           console.log('[VidSrc Subtitle] 🚀 Subtitle subsystem initialized (OpenSubtitles Direct + VTT Proxy)');
 
-          // Neutralize location.replace('about:blank') attempts
+          // Block location.replace & location.assign ad traps
           try {
             const origLocReplace = window.location.replace;
             window.location.replace = function(u) {
-              if (u === 'about:blank' || (typeof u === 'string' && u.includes('about:blank'))) {
-                console.warn('[VidSrc Anti-Ad] 🛡️ Neutralized location.replace("about:blank") ad-trap');
+              if (u === 'about:blank' || (typeof u === 'string' && (u.includes('about:blank') || !isAllowedDomain(u)))) {
+                console.warn('[VidSrc Anti-Ad] 🛡️ Neutralized location.replace ad-trap:', u);
                 return;
               }
               return origLocReplace.call(window.location, u);
+            };
+            const origLocAssign = window.location.assign;
+            window.location.assign = function(u) {
+              if (typeof u === 'string' && !isAllowedDomain(u)) {
+                console.warn('[VidSrc Anti-Ad] 🛡️ Neutralized location.assign ad-trap:', u);
+                return;
+              }
+              return origLocAssign ? origLocAssign.call(window.location, u) : undefined;
             };
           } catch(e) {}
 
@@ -157,11 +176,11 @@ const embedProxy = async (req, res) => {
 
           function isAllowedDomain(urlStr) {
             if (!urlStr || typeof urlStr !== 'string') return true;
-            if (urlStr.startsWith('blob:') || urlStr.startsWith('data:') || urlStr.startsWith('javascript:') || urlStr.startsWith('about:')) return true;
-            const lower = urlStr.toLowerCase();
-            if (lower.includes('/pl/') || lower.includes('/content/') || lower.includes('page-') || lower.includes('.m3u8') || lower.includes('.ts') || lower.includes('.vtt') || lower.includes('.srt') || lower.includes('.gz') || lower.includes('.key') || lower.includes('.wasm') || lower.includes('.woff') || lower.includes('.woff2') || lower.includes('.ttf') || lower.includes('.js') || lower.includes('.css') || lower.includes('.json') || lower.includes('wasm.php') || lower.includes('api.php') || lower.includes('cache.php') || lower.includes('cache-vtt.php') || lower.includes('.php') || lower.includes('/embed/') || lower.includes('/player/') || lower.includes('/src/') || lower.includes('vs_src.php') || lower.includes('generate.php') || lower.includes('rt_ping.php') || lower.includes('/subs/')) {
-              return true;
+            if (AD_URL_REGEX.test(urlStr)) {
+              console.warn('[VidSrc Anti-Ad] 🚫 Blocked ad URL:', urlStr);
+              return false;
             }
+            if (urlStr.startsWith('blob:') || urlStr.startsWith('data:') || urlStr.startsWith('javascript:') || urlStr.startsWith('about:')) return true;
             try {
               const u = new URL(urlStr, window.location.href);
               const h = u.hostname.toLowerCase();
@@ -213,6 +232,20 @@ const embedProxy = async (req, res) => {
               }
               return origSetAttr.call(this, name, val);
             };
+            const origContentWindowDesc = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'contentWindow');
+            if (origContentWindowDesc && origContentWindowDesc.get) {
+              Object.defineProperty(HTMLIFrameElement.prototype, 'contentWindow', {
+                get: function() {
+                  const win = origContentWindowDesc.get.call(this);
+                  if (win) {
+                    try {
+                      win.open = window.open;
+                    } catch(e) {}
+                  }
+                  return win;
+                }
+              });
+            }
           } catch(e) {}
 
           const rawAddEventListener = window.addEventListener;
@@ -287,16 +320,26 @@ const embedProxy = async (req, res) => {
             return absUrl;
           }
 
+          const noopWindow = {
+            focus: function() {},
+            blur: function() {},
+            close: function() {},
+            postMessage: function() {},
+            closed: false,
+            document: { write: function() {}, close: function() {} },
+            location: { href: 'about:blank', replace: function() {}, assign: function() {} }
+          };
           window.open = function(url, target, features) {
             console.warn('[VidSrc Anti-Ad] 🚫 Blocked popup window.open attempt:', url, 'target:', target);
-            return { focus: function() {}, blur: function() {}, close: function() {}, postMessage: function() {} };
+            return noopWindow;
           };
 
           try {
             const origCreateElement = document.createElement;
             document.createElement = function(tagName, options) {
               const el = origCreateElement.call(this, tagName, options);
-              if (String(tagName).toLowerCase() === 'a') {
+              const tag = String(tagName).toLowerCase();
+              if (tag === 'a') {
                 const origClick = el.click;
                 el.click = function() {
                   if (el.target === '_blank' || !isAllowedDomain(el.href)) {
@@ -305,25 +348,45 @@ const embedProxy = async (req, res) => {
                   }
                   return origClick.call(this);
                 };
+              } else if (tag === 'iframe') {
+                try {
+                  el.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-presentation');
+                } catch(e) {}
               }
               return el;
             };
+            const origAnchorClick = HTMLAnchorElement.prototype.click;
+            HTMLAnchorElement.prototype.click = function() {
+              if (this.target === '_blank' || !isAllowedDomain(this.href)) {
+                console.warn('[VidSrc Anti-Ad] 🚫 Blocked programmatic anchor.click():', this.href);
+                return;
+              }
+              return origAnchorClick.call(this);
+            };
           } catch(e) {}
 
-          document.addEventListener('click', function(e) {
+          const blockAdEvents = function(e) {
             let el = e.target;
             while (el && el !== document) {
               if (el.tagName === 'A' && el.href) {
-                if (el.target === '_blank' || !isAllowedDomain(el.href)) {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  console.warn('[VidSrc Anti-Ad] 🚫 Intercepted click ad navigation:', el.href);
-                  return false;
+                const href = el.getAttribute('href') || el.href;
+                if (href && href !== '#' && !href.startsWith('javascript:')) {
+                  if (el.target === '_blank' || !isAllowedDomain(el.href)) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    e.stopImmediatePropagation();
+                    console.warn('[VidSrc Anti-Ad] 🚫 Intercepted ad navigation (' + e.type + '):', el.href);
+                    return false;
+                  }
                 }
               }
               el = el.parentElement;
             }
-          }, true);
+          };
+
+          ['click', 'mousedown', 'mouseup', 'pointerdown', 'pointerup', 'touchstart', 'touchend'].forEach(function(evtName) {
+            document.addEventListener(evtName, blockAdEvents, true);
+          });
 
           if (window.fetch) {
             const rawFetch = window.fetch;
@@ -543,6 +606,37 @@ const proxyStream = async (req, res) => {
         return res.status(400).send('Missing url parameter');
     }
 
+    const lowerTarget = targetUrl.toLowerCase();
+    const isAdRequest = (lowerTarget.includes('/embed/') && /[a-f0-9]{16,}\.js/.test(lowerTarget)) ||
+                        lowerTarget.includes('sbx.js') ||
+                        lowerTarget.includes('aclib') ||
+                        lowerTarget.includes('adcash') ||
+                        lowerTarget.includes('popcash') ||
+                        lowerTarget.includes('popads') ||
+                        lowerTarget.includes('adexchangerapid') ||
+                        lowerTarget.includes('canoesaisles') ||
+                        lowerTarget.includes('groszynudgepreter') ||
+                        lowerTarget.includes('glumsynemasmitham') ||
+                        lowerTarget.includes('histats') ||
+                        lowerTarget.includes('waust') ||
+                        lowerTarget.includes('beacon.min.js') ||
+                        lowerTarget.includes('syndication') ||
+                        lowerTarget.includes('doubleclick') ||
+                        lowerTarget.includes('adnxs') ||
+                        lowerTarget.includes('trafficjunky') ||
+                        lowerTarget.includes('exoclick') ||
+                        lowerTarget.includes('juicyads') ||
+                        lowerTarget.includes('clickadu') ||
+                        lowerTarget.includes('propellerads');
+
+    if (isAdRequest) {
+        console.warn(`[vidsrc-proxy] 🛑 Hard-blocked ad script/resource: ${targetUrl}`);
+        res.setHeader('Content-Type', 'application/javascript');
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        return res.send('/* Blocked Ad Script */');
+    }
+
     // OpenSubtitles search caching (prevents Render IP rate-limiting)
     if (targetUrl.includes('opensubtitles.org/search/')) {
         const cached = subSearchCache.get(targetUrl);
@@ -583,21 +677,19 @@ const proxyStream = async (req, res) => {
                                  lowerUrl.includes('.woff') || 
                                  lowerUrl.includes('.woff2') || 
                                  lowerUrl.includes('.ttf') || 
-                                 lowerUrl.includes('.js') || 
-                                 lowerUrl.includes('.css') || 
-                                 lowerUrl.includes('.json') || 
+                                 lowerUrl.includes('vsdec.js') || 
+                                 lowerUrl.includes('player.js') || 
+                                 lowerUrl.includes('subtitles.js') || 
+                                 lowerUrl.includes('hls.min.js') || 
+                                 lowerUrl.includes('cast_sender.js') || 
                                  lowerUrl.includes('wasm.php') || 
                                  lowerUrl.includes('api.php') || 
                                  lowerUrl.includes('cache.php') || 
                                  lowerUrl.includes('cache-vtt.php') || 
-                                 lowerUrl.includes('.php') || 
-                                 lowerUrl.includes('/embed/') || 
-                                 lowerUrl.includes('/player/') || 
-                                 lowerUrl.includes('/src/') || 
                                  lowerUrl.includes('vs_src.php') || 
                                  lowerUrl.includes('generate.php') || 
                                  lowerUrl.includes('rt_ping.php') || 
-                                 STREAM_TLD_REGEX.test(lowerHost);
+                                 (STREAM_TLD_REGEX.test(lowerHost) && (lowerUrl.includes('/pl/') || lowerUrl.includes('.m3u8') || lowerUrl.includes('.ts') || lowerUrl.includes('.key')));
 
         if (!isStreamResource && !VIDSRC_WHITELIST_PATTERN.test(parsed.hostname)) {
             console.log(`[vidsrc-proxy] 🛡️ Whitelist blocked ad domain: ${parsed.hostname}`);
