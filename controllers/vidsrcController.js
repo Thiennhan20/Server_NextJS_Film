@@ -1,4 +1,9 @@
 const mongoose = require('mongoose');
+const axios = require('axios');
+
+// In-memory cache for OpenSubtitles search results to prevent Render IP rate limits
+const subSearchCache = new Map();
+const SUB_CACHE_TTL = 6 * 60 * 60 * 1000; // 6 hours
 
 // Controller: Simply return the active VidSrc domain configured by Django Admin
 const getActiveDomain = async (req, res) => {
@@ -20,81 +25,78 @@ const getActiveDomain = async (req, res) => {
         }
         return res.json({ ok: true, active_domain: 'https://vidsrcme.su' });
     } catch (error) {
-        console.error('Error fetching active VidSrc domain:', error);
-        return res.status(500).json({ ok: false, message: 'Internal Server Error' });
+        console.error('Error reading active vidsrc domain:', error);
+        return res.json({ ok: true, active_domain: 'https://vidsrcme.su' });
     }
 };
 
 const VIDSRC_WHITELIST_PATTERN = /(?:localhost|127\.0\.0\.1|vidsrcme\.su|vidsrc\.[a-z0-9-]+|cloudorchestranova\.com|vidsrcme\.ru|vidapi\.cloud|comityofcognomen\.site|epexegesisengine\.site|propinquitypostulate\.website|ataraxiaoftheapex\.space|zenithofzircon\.space|onomatopoeiaoverture\.website|vercel\.app|onrender\.com|\.(?:site|website|space|online|tech|store|fun|xyz|top|live|stream|cloud|pro|cc|vip|icu|cfd|sbs|bond|lat|best|mom|pw|me|tv|ws|click|link|info|biz|asia|one|today|rest|download|video|movie|run|app|is|to|io|co|club|work|world|moe|su|ru|sh|li|cx|ag|la|vc|bz|vg|ms|gs|tc|ac|im|gg|in|pm|ai|mobi|nu)|tmdb\.org|themoviedb\.org|opensubtitles\.org|opensubtitles\.com|subscene\.com|osdb\.link|subdl\.com|statically\.io|cloudfront\.net|fastly\.net|jwplayer\.com|jwpcdn\.com|cloudflare\.com|jsdelivr\.net)/i;
 const STREAM_TLD_REGEX = /\.(?:site|website|space|online|tech|store|fun|xyz|top|live|stream|cloud|pro|cc|vip|icu|cfd|sbs|bond|lat|best|mom|pw|me|tv|ws|click|link|info|biz|asia|one|today|rest|download|video|movie|run|app|is|to|io|co|club|work|world|moe|su|ru|sh|li|cx|ag|la|vc|bz|vg|ms|gs|tc|ac|im|gg|in|pm|ai|mobi|nu)$/i;
 
-async function fetchWithTimeout(resource, options = {}) {
-    const { timeout = 15000 } = options;
-    const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), timeout);
-    try {
-        const response = await fetch(resource, {
-            ...options,
-            signal: controller.signal
-        });
-        clearTimeout(id);
-        return response;
-    } catch (error) {
-        clearTimeout(id);
-        throw error;
-    }
-}
-
-// VidSrc Embed Proxy (Ad-blocking, Whitelist, Anti-Popup, Referer Bypassing)
+// VidSrc Embed Proxy (Ad-blocking, Whitelist, Referer Bypassing)
 const embedProxy = async (req, res) => {
     const embedUrl = req.query.url;
     if (!embedUrl) {
         return res.status(400).send('Missing url parameter');
     }
 
+    if (embedUrl.includes('about:blank') || embedUrl.startsWith('about:')) {
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        return res.send('<html><body></body></html>');
+    }
+
     try {
-        const parsed = new URL(embedUrl);
-        console.log(`[vidsrc-embed-proxy] Fetching embed HTML: ${embedUrl}`);
-        let refererHeader = `${parsed.origin}/`;
+        let targetEmbedUrl = embedUrl;
+        if (targetEmbedUrl.includes('/embed/movie') || targetEmbedUrl.includes('/embed/tv')) {
+            targetEmbedUrl = targetEmbedUrl.replace(/https?:\/\/(?:vidsrc\.[a-z0-9-]+|vidsrcme\.su|vidsrcme\.ru)/i, 'https://vidsrcme.su');
+        }
+        // Clean ds_lang parameter if it contains encoded comma (%2C or ,) to avoid Cloudflare 403 Forbidden WAF blocks
+        if (targetEmbedUrl.includes('ds_lang=')) {
+            targetEmbedUrl = targetEmbedUrl.replace(/ds_lang=([^&]+)/gi, (m, langVal) => {
+                const cleanLang = decodeURIComponent(langVal).split(',')[0].trim();
+                return `ds_lang=${cleanLang}`;
+            });
+        }
+
+        const parsed = new URL(targetEmbedUrl);
+
         const customRef = req.query.ref;
+        let refererHeader = customRef ? (customRef.endsWith('/') ? customRef : customRef + '/') : `${parsed.origin}/`;
         if (customRef) {
-            refererHeader = customRef;
-        } else if (embedUrl.includes('vidsrcme.su') || embedUrl.includes('vidsrc.')) {
+            refererHeader = customRef.endsWith('/') ? customRef : customRef + '/';
+        } else if (targetEmbedUrl.includes('cloudorchestranova.com/embed/movie') || targetEmbedUrl.includes('cloudorchestranova.com/embed/tv')) {
             refererHeader = 'https://vidsrcme.su/';
-        } else if (embedUrl.includes('vidsrc-me.ru') || embedUrl.includes('vidsrcme.ru')) {
-            refererHeader = 'https://vidsrcme.ru/';
-        } else if (embedUrl.includes('cloudorchestranova.com/embed/movie') || embedUrl.includes('cloudorchestranova.com/embed/tv')) {
-            refererHeader = 'https://vidsrcme.su/';
-        } else if (embedUrl.includes('cloudorchestranova.com/embed/player')) {
+        } else if (targetEmbedUrl.includes('cloudorchestranova.com/embed/player')) {
             refererHeader = 'https://cloudorchestranova.com/';
         }
 
-        const embedRes = await fetchWithTimeout(embedUrl, {
+        console.log(`[vidsrc-embed-proxy] 🌐 Fetching embed: ${targetEmbedUrl}`);
+        console.log(`[vidsrc-embed-proxy] 🔑 Using Referer: ${refererHeader}`);
+
+        const embedRes = await axios.get(targetEmbedUrl, {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-                'Referer': refererHeader,
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
                 'Accept-Language': 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
+                'Referer': refererHeader,
+                'Origin': parsed.origin,
                 'Sec-Ch-Ua': '"Google Chrome";v="125", "Chromium";v="125", "Not.A/Brand";v="24"',
                 'Sec-Ch-Ua-Mobile': '?0',
                 'Sec-Ch-Ua-Platform': '"Windows"',
-                'Sec-Fetch-Dest': 'iframe',
-                'Sec-Fetch-Mode': 'navigate',
-                'Sec-Fetch-Site': 'cross-site',
-                'Upgrade-Insecure-Requests': '1'
-            }
+            },
+            timeout: 15000,
+            responseType: 'text'
         });
 
-        if (!embedRes.ok) {
-            return res.status(embedRes.status).send(`VidSrc server trả về mã ${embedRes.status}`);
-        }
+        console.log(`[vidsrc-embed-proxy] ✅ Response (200 OK) for: ${targetEmbedUrl}`);
+        let html = embedRes.data;
 
-        let html = await embedRes.text();
-        const embedOrigin = parsed.origin;
-
-        // Strip anti-tamper and sandbox redirect scripts that kill/blank the page
+        // Clean known ad scripts & devtool killers safely
         html = html.replace(/<script[^>]*ads\.js[\s\S]*?<\/script>/gi, '');
         html = html.replace(/<script[^>]*devtool-guard[\s\S]*?<\/script>/gi, '');
+        html = html.replace(/<script[^>]*disable-devtool[^>]*><\/script>/gi, '');
+        html = html.replace(/<script[^>]*no-devtool[^>]*><\/script>/gi, '');
         html = html.replace(/<script[^>]*beacon\.min\.js[\s\S]*?<\/script>/gi, '');
         html = html.replace(/<script[^>]*adexchangerapid[\s\S]*?<\/script>/gi, '');
         html = html.replace(/<script[^>]*canoesaisles[\s\S]*?<\/script>/gi, '');
@@ -102,22 +104,29 @@ const embedProxy = async (req, res) => {
         html = html.replace(/<script[^>]*glumsynemasmitham[\s\S]*?<\/script>/gi, '');
         html = html.replace(/<script[^>]*histats[\s\S]*?<\/script>/gi, '');
         html = html.replace(/<script[^>]*waust[\s\S]*?<\/script>/gi, '');
-        html = html.replace(/<script[^>]*disable-devtool[^>]*><\/script>/gi, '');
         html = html.replace(/<script[^>]*sbx\.js[^>]*><\/script>/gi, '');
         html = html.replace(/<script[^>]*>(?:(?!<\/script>)[\s\S])*?function\s+kill\(\)[\s\S]*?<\/script>/gi, '');
         html = html.replace(/<script[^>]*>(?:(?!<\/script>)[\s\S])*?\/embed\/[a-f0-9]{20,}\.js[\s\S]*?<\/script>/gi, '');
+        html = html.replace(/location\.replace\(['"]about:blank['"]\)/gi, 'console.log("[Anti-Devtools] Bypassed about:blank")');
+        html = html.replace(/document\.documentElement\.innerHTML\s*=\s*['"]['"]/gi, 'console.log("[Anti-Devtools] Bypassed innerHTML clear")');
         html = html.replace(/DisableDevtool/gi, 'NoDevtool');
         html = html.replace(/disable-devtool/gi, 'no-devtool');
         html = html.replace(/histats/gi, 'nohistats');
         html = html.replace(/VS_DEVTOOLS/g, 'NO_DEVTOOLS');
         html = html.replace(/VS_EXPIRED/g, 'NO_EXPIRED');
 
-        // Injected Anti-Ad, Anti-Popup, and Resource Monitor Script
+        const embedOrigin = parsed.origin;
+        const rawProto = (req.headers['x-forwarded-proto'] || req.protocol || 'http').toString();
+        const host = req.get('host') || req.headers.host || 'localhost:3001';
+        const protocol = (rawProto.includes('https') || host.includes('onrender.com')) ? 'https' : 'http';
+        const serverOrigin = `${protocol}://${host}`;
+
         const monitorScript = `
         <base href="${embedOrigin}/">
         <script>
         (function() {
           const originUrl = "${embedOrigin}";
+          const localServerOrigin = "${serverOrigin}";
           const VIDSRC_WHITELIST_PATTERN = /(?:localhost|127\\.0\\.0\\.1|vidsrcme\\.su|vidsrc\\.[a-z0-9-]+|cloudorchestranova\\.com|vidsrcme\\.ru|vidapi\\.cloud|comityofcognomen\\.site|epexegesisengine\\.site|propinquitypostulate\\.website|ataraxiaoftheapex\\.space|zenithofzircon\\.space|onomatopoeiaoverture\\.website|vercel\\.app|onrender\\.com|\\.(?:site|website|space|online|tech|store|fun|xyz|top|live|stream|cloud|pro|cc|vip|icu|cfd|sbs|bond|lat|best|mom|pw|me|tv|ws|click|link|info|biz|asia|one|today|rest|download|video|movie|run|app|is|to|io|co|club|work|world|moe|su|ru|sh|li|cx|ag|la|vc|bz|vg|ms|gs|tc|ac|im|gg|in|pm|ai|mobi|nu)|tmdb\\.org|themoviedb\\.org|opensubtitles\\.org|opensubtitles\\.com|subscene\\.com|osdb\\.link|subdl\\.com|statically\\.io|cloudfront\\.net|fastly\\.net|jwplayer\\.com|jwpcdn\\.com|cloudflare\\.com|jsdelivr\\.net)/i;
           const STREAM_TLD_REGEX = /\\.(?:site|website|space|online|tech|store|fun|xyz|top|live|stream|cloud|pro|cc|vip|icu|cfd|sbs|bond|lat|best|mom|pw|me|tv|ws|click|link|info|biz|asia|one|today|rest|download|video|movie|run|app|is|to|io|co|club|work|world|moe|su|ru|sh|li|cx|ag|la|vc|bz|vg|ms|gs|tc|ac|im|gg|in|pm|ai|mobi|nu)$/i;
 
@@ -133,10 +142,21 @@ const embedProxy = async (req, res) => {
             };
           } catch(e) {}
 
+          window.DisableDevtool = function() {};
+          window.NoDevtool = function() {};
+          window.devtoolsDetector = { launch: function() {}, addListener: function() {}, isPlugin: false };
+
+          try {
+            for (var k in localStorage) {
+              if (k && k.indexOf('va_subtitle_') === 0) localStorage.removeItem(k);
+            }
+          } catch(e) {}
+
           function isAllowedDomain(urlStr) {
             if (!urlStr || typeof urlStr !== 'string') return true;
             if (urlStr.startsWith('blob:') || urlStr.startsWith('data:') || urlStr.startsWith('javascript:') || urlStr.startsWith('about:')) return true;
-            if (urlStr.includes('/pl/') || urlStr.includes('/content/') || urlStr.includes('page-') || urlStr.includes('.m3u8') || urlStr.includes('.ts') || urlStr.includes('.vtt') || urlStr.includes('.srt') || urlStr.includes('wasm.php') || urlStr.includes('api.php') || urlStr.includes('/embed/') || urlStr.includes('/player/') || urlStr.includes('generate.php') || urlStr.includes('rt_ping.php') || urlStr.includes('/subs/') || urlStr.includes('cache.php') || urlStr.includes('cache-vtt.php') || urlStr.includes('vs_src.php')) {
+            const lower = urlStr.toLowerCase();
+            if (lower.includes('/pl/') || lower.includes('/content/') || lower.includes('page-') || lower.includes('.m3u8') || lower.includes('.ts') || lower.includes('.vtt') || lower.includes('.srt') || lower.includes('.gz') || lower.includes('.key') || lower.includes('.wasm') || lower.includes('.woff') || lower.includes('.woff2') || lower.includes('.ttf') || lower.includes('.js') || lower.includes('.css') || lower.includes('.json') || lower.includes('wasm.php') || lower.includes('api.php') || lower.includes('cache.php') || lower.includes('cache-vtt.php') || lower.includes('.php') || lower.includes('/embed/') || lower.includes('/player/') || lower.includes('/src/') || lower.includes('vs_src.php') || lower.includes('generate.php') || lower.includes('rt_ping.php') || lower.includes('/subs/')) {
               return true;
             }
             try {
@@ -151,13 +171,9 @@ const embedProxy = async (req, res) => {
             }
           }
 
-          window.DisableDevtool = function() {};
-          window.NoDevtool = function() {};
-          window.devtoolsDetector = { launch: function() {}, addListener: function() {}, isPlugin: false };
-
-          // Intercept HTMLIFrameElement src & setAttribute to proxy inner embed frames
           function resolveEmbedProxyUrl(rawUrl) {
             if (!rawUrl || typeof rawUrl !== 'string') return rawUrl;
+            if (rawUrl.startsWith('about:') || rawUrl.includes('about:blank')) return rawUrl;
             if (rawUrl.includes('/api/vidsrc/embed-proxy')) return rawUrl;
             if (rawUrl.startsWith('blob:') || rawUrl.startsWith('data:') || rawUrl.startsWith('javascript:')) return rawUrl;
 
@@ -166,7 +182,8 @@ const embedProxy = async (req, res) => {
             else if (rawUrl.startsWith('/')) absUrl = originUrl + rawUrl;
             else if (!rawUrl.startsWith('http://') && !rawUrl.startsWith('https://')) absUrl = originUrl + '/' + rawUrl;
 
-            return window.location.origin + '/api/vidsrc/embed-proxy?url=' + encodeURIComponent(absUrl) + '&ref=' + encodeURIComponent(originUrl);
+            const baseOrigin = window.location.origin || localServerOrigin;
+            return baseOrigin + '/api/vidsrc/embed-proxy?url=' + encodeURIComponent(absUrl) + '&ref=' + encodeURIComponent(originUrl);
           }
 
           try {
@@ -189,7 +206,6 @@ const embedProxy = async (req, res) => {
             };
           } catch(e) {}
 
-          // Suppress VS_DEVTOOLS and VS_EXPIRED postMessages from inner frames to prevent blanking the page
           const rawAddEventListener = window.addEventListener;
           window.addEventListener = function(type, listener, options) {
             if (type === 'message' && typeof listener === 'function') {
@@ -210,14 +226,13 @@ const embedProxy = async (req, res) => {
           function resolveProxyUrl(rawUrl) {
             if (!rawUrl || typeof rawUrl !== 'string') return rawUrl;
             if (rawUrl.includes('/api/vidsrc/proxy')) return rawUrl;
-            if (rawUrl.startsWith('blob:') || rawUrl.startsWith('data:') || rawUrl.startsWith('javascript:')) return rawUrl;
+            if (rawUrl.startsWith('blob:') || rawUrl.startsWith('data:') || rawUrl.startsWith('javascript:') || rawUrl.startsWith('about:')) return rawUrl;
 
             let absUrl = rawUrl;
             if (rawUrl.startsWith('//')) absUrl = 'https:' + rawUrl;
             else if (rawUrl.startsWith('/')) absUrl = originUrl + rawUrl;
             else if (!rawUrl.startsWith('http://') && !rawUrl.startsWith('https://')) absUrl = originUrl + '/' + rawUrl;
 
-            // Whitelist Check: Block any domain NOT in the Whitelist!
             if (!isAllowedDomain(absUrl)) {
               console.log('[Anti-Adblock VidSrc] Whitelist blocked ad resource:', absUrl);
               return 'data:text/javascript,/*blocked_by_whitelist*/';
@@ -225,26 +240,26 @@ const embedProxy = async (req, res) => {
 
             if (absUrl.includes('jwplayer.com') || absUrl.includes('jwpcdn.com') || absUrl.includes('cloudflare.com') || absUrl.includes('jsdelivr.net')) return absUrl;
 
+            const baseOrigin = window.location.origin || localServerOrigin;
+
             // Intercept local relative M3U8 requests like http://localhost:3001/pl/...
             if (absUrl.includes(window.location.host) && absUrl.includes('/pl/')) {
               const realPath = absUrl.substring(absUrl.indexOf('/pl/'));
               const realTarget = 'https://comityofcognomen.site' + realPath;
-              return window.location.origin + '/api/vidsrc/proxy?url=' + encodeURIComponent(realTarget) + '&ref=https%3A%2F%2Fcloudorchestranova.com';
+              return baseOrigin + '/api/vidsrc/proxy?url=' + encodeURIComponent(realTarget) + '&ref=https%3A%2F%2Fcloudorchestranova.com';
             }
 
             if (absUrl.startsWith('http://') || absUrl.startsWith('https://')) {
-              return window.location.origin + '/api/vidsrc/proxy?url=' + encodeURIComponent(absUrl) + '&ref=' + encodeURIComponent(originUrl);
+              return baseOrigin + '/api/vidsrc/proxy?url=' + encodeURIComponent(absUrl) + '&ref=' + encodeURIComponent(originUrl);
             }
             return absUrl;
           }
 
-          // Anti-Popup: Block window.open and return dummy window object
           window.open = function(url, target, features) {
             console.log('[Anti-Popup VidSrc] Blocked window.open attempt:', url);
             return { focus: function() {}, blur: function() {}, close: function() {}, postMessage: function() {} };
           };
 
-          // Intercept dynamic link clicks and fake ad anchors
           try {
             const origCreateElement = document.createElement;
             document.createElement = function(tagName, options) {
@@ -263,7 +278,6 @@ const embedProxy = async (req, res) => {
             };
           } catch(e) {}
 
-          // Global click capture to neutralize ad overlays
           document.addEventListener('click', function(e) {
             let el = e.target;
             while (el && el !== document) {
@@ -293,24 +307,17 @@ const embedProxy = async (req, res) => {
 
               const proxyTarget = resolveProxyUrl(url);
 
-              try {
-                let res;
-                if (typeof input === 'string') {
-                  res = await rawFetch.call(this, proxyTarget, init);
-                } else if (input && typeof input === 'object' && input.url) {
-                  try {
-                    const newReq = new Request(proxyTarget, input);
-                    res = await rawFetch.call(this, newReq, init);
-                  } catch(e) {
-                    res = await rawFetch.call(this, proxyTarget, init || input);
-                  }
-                } else {
-                  res = await rawFetch.call(this, proxyTarget, init);
+              if (typeof input === 'string') {
+                return rawFetch.call(this, proxyTarget, init);
+              } else if (input && typeof input === 'object' && input.url) {
+                try {
+                  const newReq = new Request(proxyTarget, input);
+                  return rawFetch.call(this, newReq, init);
+                } catch(e) {
+                  return rawFetch.call(this, proxyTarget, init || input);
                 }
-                return res;
-              } catch(err) {
-                throw err;
               }
+              return rawFetch.call(this, proxyTarget, init);
             };
           }
 
@@ -354,13 +361,25 @@ const embedProxy = async (req, res) => {
             };
           } catch(e) {}
 
+          // Auto-trigger subtitle loading: Hook into JWSubs.setup so
+          // auto() runs immediately after player receives IMDB ID from API
           var _hookedSetup = false;
           function hookJWSubs() {
             if (window.JWSubs && window.JWSubs.setup && !_hookedSetup) {
               _hookedSetup = true;
               var origSetup = window.JWSubs.setup;
               window.JWSubs.setup = function(data) {
+                if (data && window.SUB) {
+                  if (data.imdb_id) window.SUB.imdbId = String(data.imdb_id).replace(/^tt/i, '');
+                  if (data.season) window.SUB.season = parseInt(data.season, 10);
+                  if (data.episode) window.SUB.episode = parseInt(data.episode, 10);
+                }
                 var res = origSetup.apply(this, arguments);
+                if (data && window.SUB) {
+                  if (data.imdb_id) window.SUB.imdbId = String(data.imdb_id).replace(/^tt/i, '');
+                  if (data.season) window.SUB.season = parseInt(data.season, 10);
+                  if (data.episode) window.SUB.episode = parseInt(data.episode, 10);
+                }
                 setTimeout(function() {
                   try {
                     if (window.JWSubs && typeof window.JWSubs.auto === 'function') {
@@ -370,18 +389,13 @@ const embedProxy = async (req, res) => {
                 }, 300);
                 return res;
               };
-              setTimeout(function() {
-                try {
-                  if (window.JWSubs && typeof window.JWSubs.auto === 'function') {
-                    window.JWSubs.auto();
-                  }
-                } catch(e) {}
-              }, 500);
-              if (_hookInterval) clearInterval(_hookInterval);
+            }
+            if (window.JWSubs && typeof window.JWSubs.auto === 'function') {
+              try { window.JWSubs.auto(); } catch(e) {}
             }
           }
-          var _hookInterval = setInterval(hookJWSubs, 500);
-          setTimeout(function() { if (_hookInterval) clearInterval(_hookInterval); }, 10000);
+          var _hookInterval = setInterval(hookJWSubs, 1000);
+          setTimeout(function() { clearInterval(_hookInterval); }, 15000);
         })();
         </script>
         `;
@@ -392,38 +406,119 @@ const embedProxy = async (req, res) => {
             html = monitorScript + html;
         }
 
+        res.removeHeader('X-Frame-Options');
         res.setHeader('Content-Type', 'text/html; charset=utf-8');
         res.setHeader('Access-Control-Allow-Origin', '*');
-        res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-        res.setHeader('Access-Control-Allow-Headers', '*');
-        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
-        res.setHeader('Referrer-Policy', 'origin');
         res.setHeader('Content-Security-Policy', "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:; script-src * 'unsafe-inline' 'unsafe-eval' data: blob:; connect-src * data: blob:; img-src * data: blob:; style-src * 'unsafe-inline';");
-        return res.send(html);
+        res.setHeader('Cache-Control', 'no-store');
+        res.send(html);
     } catch (err) {
-        console.error(`[vidsrc-embed-proxy] Error:`, err);
-        return res.status(500).send(err.message);
+        const statusCode = err.response ? err.response.status : 500;
+        console.error(`[vidsrc-embed-proxy] ❌ Error (${statusCode}) for ${embedUrl}:`, err.message);
+        if (err.response) {
+            console.error(`[vidsrc-embed-proxy] Status Details: ${err.response.status} ${err.response.statusText}`);
+        }
+        res.status(statusCode).send('VidSrc embed proxy error: ' + err.message);
     }
 };
 
-// VidSrc Stream & Resource Proxy (HLS playlist rewriting, segment tunneling, subtitle filtering)
+function assToVtt(assText) {
+    const lines = assText.split(/\r?\n/);
+    const vttLines = ['WEBVTT\n'];
+    for (let line of lines) {
+        if (line.startsWith('Dialogue:')) {
+            const parts = line.substring(9).split(',');
+            if (parts.length >= 10) {
+                const start = parts[1].trim();
+                const end = parts[2].trim();
+                let text = parts.slice(9).join(',').trim();
+                text = text.replace(/\{[^}]+\}/g, '').replace(/\\N/gi, '\n');
+                const fmtTime = (t) => {
+                    const match = t.match(/(\d+):(\d{2}):(\d{2})[.,](\d{2,3})/);
+                    if (!match) return t;
+                    const h = match[1].padStart(2, '0');
+                    const m = match[2];
+                    const s = match[3];
+                    const ms = match[4].padEnd(3, '0');
+                    return `${h}:${m}:${s}.${ms}`;
+                };
+                const vttStart = fmtTime(start);
+                const vttEnd = fmtTime(end);
+                if (text) {
+                    vttLines.push(`${vttStart} --> ${vttEnd}\n${text}\n`);
+                }
+            }
+        }
+    }
+    return vttLines.join('\n');
+}
+
+// VidSrc Stream Proxy
 const proxyStream = async (req, res) => {
     const targetUrl = req.query.url;
     const customRef = req.query.ref;
-
     if (!targetUrl) {
         return res.status(400).send('Missing url parameter');
     }
 
+    // OpenSubtitles search caching (prevents Render IP rate-limiting)
+    if (targetUrl.includes('opensubtitles.org/search/')) {
+        const cached = subSearchCache.get(targetUrl);
+        if (cached && (Date.now() - cached.time < SUB_CACHE_TTL)) {
+            const cachedTxt = Buffer.from(cached.data).toString('utf-8').trim();
+            if (cachedTxt === '[]' || cachedTxt.length <= 2 || cachedTxt.includes('403 Forbidden') || cachedTxt.includes('Just a moment')) {
+                subSearchCache.delete(targetUrl);
+            } else {
+                res.setHeader('Content-Type', cached.contentType);
+                res.setHeader('Access-Control-Allow-Origin', '*');
+                res.setHeader('Cache-Control', 'public, max-age=21600');
+                return res.send(cached.data);
+            }
+        }
+    }
+
     try {
         const parsed = new URL(targetUrl);
-        const hostLower = parsed.hostname.toLowerCase();
-        const isStreamDomain = STREAM_TLD_REGEX.test(hostLower);
+        const lowerUrl = targetUrl.toLowerCase();
+        const lowerHost = parsed.hostname.toLowerCase();
 
-        const isStreamResource = targetUrl.includes('/pl/') || targetUrl.includes('/content/') || targetUrl.includes('page-') || targetUrl.includes('.m3u8') || targetUrl.includes('.ts') || targetUrl.includes('.vtt') || targetUrl.includes('.srt') || targetUrl.includes('wasm.php') || targetUrl.includes('api.php') || targetUrl.includes('/embed/') || targetUrl.includes('/player/') || targetUrl.includes('generate.php') || targetUrl.includes('rt_ping.php') || targetUrl.includes('/subs/') || targetUrl.includes('cache.php') || targetUrl.includes('cache-vtt.php') || targetUrl.includes('vs_src.php') || isStreamDomain;
+        const isStreamResource = lowerUrl.includes('/pl/') || 
+                                 lowerUrl.includes('/content/') || 
+                                 lowerUrl.includes('page-') || 
+                                 lowerUrl.includes('.m3u8') || 
+                                 lowerUrl.includes('.ts') || 
+                                 lowerUrl.includes('.vtt') || 
+                                 lowerUrl.includes('.srt') || 
+                                 lowerUrl.includes('.ass') || 
+                                 lowerUrl.includes('.ssa') || 
+                                 lowerUrl.includes('.gz') || 
+                                 lowerUrl.includes('/subtitles/') || 
+                                 lowerUrl.includes('/sub/') || 
+                                 lowerUrl.includes('/subs/') || 
+                                 lowerUrl.includes('opensubtitles') || 
+                                 lowerUrl.includes('.key') || 
+                                 lowerUrl.includes('.wasm') || 
+                                 lowerUrl.includes('.woff') || 
+                                 lowerUrl.includes('.woff2') || 
+                                 lowerUrl.includes('.ttf') || 
+                                 lowerUrl.includes('.js') || 
+                                 lowerUrl.includes('.css') || 
+                                 lowerUrl.includes('.json') || 
+                                 lowerUrl.includes('wasm.php') || 
+                                 lowerUrl.includes('api.php') || 
+                                 lowerUrl.includes('cache.php') || 
+                                 lowerUrl.includes('cache-vtt.php') || 
+                                 lowerUrl.includes('.php') || 
+                                 lowerUrl.includes('/embed/') || 
+                                 lowerUrl.includes('/player/') || 
+                                 lowerUrl.includes('/src/') || 
+                                 lowerUrl.includes('vs_src.php') || 
+                                 lowerUrl.includes('generate.php') || 
+                                 lowerUrl.includes('rt_ping.php') || 
+                                 STREAM_TLD_REGEX.test(lowerHost);
 
         if (!isStreamResource && !VIDSRC_WHITELIST_PATTERN.test(parsed.hostname)) {
-            console.log(`[vidsrc-proxy] Whitelist blocked ad domain: ${parsed.hostname}`);
+            console.log(`[vidsrc-proxy] 🛡️ Whitelist blocked ad domain: ${parsed.hostname}`);
             res.setHeader('Content-Type', 'application/javascript');
             res.setHeader('Access-Control-Allow-Origin', '*');
             res.setHeader('Cache-Control', 'no-store');
@@ -438,22 +533,26 @@ const proxyStream = async (req, res) => {
             originUrlStr = 'https://cloudorchestranova.com';
         }
 
+        if (targetUrl.includes('opensubtitles') || targetUrl.includes('cache.php') || targetUrl.includes('.vtt') || targetUrl.includes('subtitles.js')) {
+            console.log(`[vidsrc-proxy] 🎬 Subtitle Resource (${req.method}): ${targetUrl}`);
+        }
+
         const passHeaders = {
-            'User-Agent': targetUrl.includes('opensubtitles')
-                ? 'TemporaryUserAgent'
-                : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
             'Accept': '*/*',
             'Accept-Language': 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Referer': refUrl,
+            'Origin': originUrlStr,
+            'Sec-Ch-Ua': '"Google Chrome";v="125", "Chromium";v="125", "Not.A/Brand";v="24"',
+            'Sec-Ch-Ua-Mobile': '?0',
+            'Sec-Ch-Ua-Platform': '"Windows"',
+            'Sec-Fetch-Dest': 'empty',
+            'Sec-Fetch-Mode': 'cors',
+            'Sec-Fetch-Site': 'cross-site'
         };
 
         if (targetUrl.includes('opensubtitles')) {
             passHeaders['X-User-Agent'] = req.headers['x-user-agent'] || 'trailers.to-UA';
-        } else {
-            passHeaders['Referer'] = refUrl;
-            passHeaders['Origin'] = originUrlStr;
-            passHeaders['Sec-Ch-Ua'] = '"Google Chrome";v="125", "Chromium";v="125", "Not.A/Brand";v="24"';
-            passHeaders['Sec-Ch-Ua-Mobile'] = '?0';
-            passHeaders['Sec-Ch-Ua-Platform'] = '"Windows"';
         }
 
         if (req.headers['content-type']) {
@@ -464,11 +563,16 @@ const proxyStream = async (req, res) => {
             passHeaders['Range'] = req.headers['range'];
         }
 
-        const fetchOpts = {
-            method: req.method,
+        const axiosConfig = {
+            method: req.method || 'GET',
+            url: targetUrl,
             headers: passHeaders,
+            responseType: 'arraybuffer',
+            timeout: 15000,
+            validateStatus: () => true
         };
 
+        // Forward request body for POST/PUT requests (needed for cache.php & cache-vtt.php binary payloads)
         if (req.method && req.method !== 'GET' && req.method !== 'HEAD') {
             let bodyBuffer = null;
             if (Buffer.isBuffer(req.body)) {
@@ -476,37 +580,93 @@ const proxyStream = async (req, res) => {
             } else if (typeof req.body === 'string') {
                 bodyBuffer = Buffer.from(req.body);
             } else if (typeof req.body === 'object' && req.body !== null && Object.keys(req.body).length > 0) {
-                bodyBuffer = Buffer.from(JSON.stringify(req.body));
+                const querystring = require('querystring');
+                bodyBuffer = Buffer.from(querystring.stringify(req.body));
             }
 
             if (bodyBuffer && bodyBuffer.length > 0) {
-                fetchOpts.body = bodyBuffer;
+                axiosConfig.data = bodyBuffer;
             }
         }
 
-        const proxyRes = await fetchWithTimeout(targetUrl, fetchOpts);
+        let proxyRes = null;
 
-        if (!proxyRes.ok && proxyRes.status !== 206) {
-            return res.status(proxyRes.status).send(`VidSrc proxy trả về mã ${proxyRes.status}`);
+        if (targetUrl.includes('opensubtitles')) {
+            const osUAs = [
+                'TemporaryUserAgent',
+                'VLSub 0.10.2',
+                'OpenSubtitlesPlayer v4.7',
+                'trailers.to-UA',
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
+            ];
+
+            for (const ua of osUAs) {
+                const cleanHeaders = {
+                    'User-Agent': ua,
+                    'X-User-Agent': ua,
+                    'Accept': '*/*',
+                    'Accept-Language': 'en-US,en;q=0.9,vi;q=0.8'
+                };
+                const cfg = {
+                    method: req.method || 'GET',
+                    url: targetUrl,
+                    headers: cleanHeaders,
+                    responseType: 'arraybuffer',
+                    timeout: 10000,
+                    validateStatus: () => true
+                };
+                try {
+                    const r = await axios(cfg);
+                    if (r.status === 200 && r.data && r.data.length > 2) {
+                        const txt = Buffer.from(r.data).toString('utf-8');
+                        if (!txt.includes('Just a moment') && !txt.includes('403 Forbidden')) {
+                            console.log(`[vidsrc-proxy] ✅ OpenSubtitles success with UA: ${ua}`);
+                            proxyRes = r;
+                            break;
+                        }
+                    }
+                } catch(e) {}
+            }
         }
 
-        let contentType = proxyRes.headers.get('content-type') || 'application/octet-stream';
-        if (targetUrl.includes('opensubtitles')) {
+        if (!proxyRes) {
+            proxyRes = await axios(axiosConfig);
+        }
+
+        let contentType = proxyRes.headers['content-type'] || 'application/octet-stream';
+        if (targetUrl.includes('opensubtitles') && contentType.includes('text/html')) {
             contentType = 'application/json; charset=utf-8';
         }
-        let dataBuf = Buffer.from(await proxyRes.arrayBuffer());
-        const textContent = dataBuf.toString('utf-8');
 
-        // Patch subtitles.js on-the-fly to filter unsupported .ass/.sub formats and auto-retry next result on error
+        let dataBuf = Buffer.from(proxyRes.data);
+        let textContent = dataBuf.toString('utf-8').replace(/^\uFEFF/, '').replace(/^\xEF\xBB\xBF/, '');
+
+        // Convert .ass/.ssa subtitles to WebVTT format on-the-fly
+        if (targetUrl.includes('.ass') || targetUrl.includes('.ssa') || textContent.startsWith('[Script Info]') || (textContent.includes('ScriptType:') && textContent.includes('Dialogue:'))) {
+            const convertedVtt = assToVtt(textContent);
+            dataBuf = Buffer.from(convertedVtt, 'utf-8');
+            contentType = 'text/vtt; charset=utf-8';
+        }
+
+        // Patch subtitles.js on-the-fly to filter unsupported binary formats, auto-retry next OpenSubtitles result on error, and force fresh IMDB ID, season, episode from api.php
         if (targetUrl.includes('subtitles.js')) {
             let jsText = textContent;
             jsText = jsText.replace(
+                "var imdb = CONFIG.imdb || d.imdb_id || '';",
+                "var imdb = d.imdb_id || CONFIG.imdb || '';"
+            ).replace(
+                "SUB.season = CONFIG.season || (d.season ? parseInt(d.season, 10) : null);",
+                "SUB.season = (d.season ? parseInt(d.season, 10) : null) || CONFIG.season;"
+            ).replace(
+                "SUB.episode = CONFIG.episode || (d.episode ? parseInt(d.episode, 10) : null);",
+                "SUB.episode = (d.episode ? parseInt(d.episode, 10) : null) || CONFIG.episode;"
+            ).replace(
                 "searchOS(lang).then(function (data) {",
                 `searchOS(lang).then(function (data) {
         if (Array.isArray(data)) {
             data = data.filter(function(s) {
                 var fn = (s.SubFileName || s.MovieReleaseName || s.SubFormat || '').toLowerCase();
-                return !fn.endsWith('.ass') && !fn.endsWith('.sub') && !fn.endsWith('.idx') && s.SubFormat !== 'ass' && s.SubFormat !== 'sub';
+                return !fn.endsWith('.sub') && !fn.endsWith('.idx') && s.SubFormat !== 'sub';
             });
         }`
             ).replace(
@@ -523,7 +683,7 @@ const proxyStream = async (req, res) => {
         // M3U8 Playlist Rewriter for VidSrc Stream Proxy
         if (textContent.includes('#EXTM3U')) {
             const rawProto = (req.headers['x-forwarded-proto'] || req.protocol || 'http').toString();
-            const host = req.headers.host || 'localhost:3001';
+            const host = req.get('host') || req.headers.host || 'localhost:3001';
             const protocol = (rawProto.includes('https') || host.includes('onrender.com')) ? 'https' : 'http';
             const serverOrigin = `${protocol}://${host}`;
             const targetBaseUrl = targetUrl.substring(0, targetUrl.lastIndexOf('/') + 1);
@@ -563,11 +723,34 @@ const proxyStream = async (req, res) => {
         res.setHeader('Content-Type', contentType.includes('mpegurl') || textContent.includes('#EXTM3U') ? 'application/vnd.apple.mpegurl' : contentType);
         res.setHeader('Access-Control-Allow-Origin', '*');
         res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', '*');
+        res.setHeader('Accept-Ranges', 'bytes');
         res.setHeader('Cache-Control', 'no-store');
-        return res.send(dataBuf);
+
+        if (targetUrl.includes('opensubtitles.org/search/') && proxyRes.status === 200) {
+            try {
+                const parsedArr = JSON.parse(textContent);
+                if (Array.isArray(parsedArr) && parsedArr.length > 0) {
+                    subSearchCache.set(targetUrl, {
+                        data: dataBuf,
+                        contentType: contentType,
+                        time: Date.now()
+                    });
+                }
+            } catch(e) {}
+        }
+
+        res.status(proxyRes.status).send(dataBuf);
     } catch (err) {
-        console.error(`[vidsrc-proxy] Error:`, err);
-        return res.status(500).send(err.message);
+        const statusCode = err.response ? err.response.status : 500;
+        console.error(`[vidsrc-proxy] ❌ Error (${statusCode}) for ${targetUrl}:`, err.message);
+        if (err.response) {
+            console.error(`[vidsrc-proxy] Status Details: ${err.response.status} ${err.response.statusText}`);
+        }
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', '*');
+        res.status(statusCode).send('VidSrc stream proxy error: ' + err.message);
     }
 };
 
