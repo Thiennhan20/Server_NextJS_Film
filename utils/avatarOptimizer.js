@@ -1,25 +1,38 @@
 const sharp = require('sharp');
 
 /**
- * Optimize avatar image
- * - Convert to WebP format
- * - Resize to 200x200 (smaller for faster load)
- * - Compress to ~30KB (much smaller)
+ * Optimize avatar image to WebP binary buffer (for cloud storage like R2)
+ * @param {Buffer} imageBuffer - Input image buffer
+ * @returns {Promise<Buffer>} - WebP image buffer
+ */
+async function optimizeAvatarToBuffer(imageBuffer) {
+  try {
+    const optimized = await sharp(imageBuffer)
+      .resize(600, 600, {
+        fit: 'cover',
+        position: 'center'
+      })
+      .webp({
+        quality: 92, // High-fidelity crisp quality
+        effort: 4
+      })
+      .toBuffer();
+
+    return optimized;
+  } catch (error) {
+    console.error('Avatar optimization to buffer error:', error);
+    throw new Error('Failed to optimize avatar buffer');
+  }
+}
+
+/**
+ * Optimize avatar image and return base64 string (backward compatibility)
  * @param {Buffer} imageBuffer - Input image buffer
  * @returns {Promise<string>} - Base64 WebP string
  */
 async function optimizeAvatar(imageBuffer) {
   try {
-    const optimized = await sharp(imageBuffer)
-      .resize(500, 500, {
-        fit: 'cover',
-        position: 'center'
-      })
-      .webp({
-        quality: 80, // Upgraded quality for sharp full-screen previews
-        effort: 4 // Faster compression
-      })
-      .toBuffer();
+    const optimized = await optimizeAvatarToBuffer(imageBuffer);
 
     // Convert to base64
     const base64 = `data:image/webp;base64,${optimized.toString('base64')}`;
@@ -65,6 +78,8 @@ async function validateImage(buffer) {
 
 module.exports = {
   optimizeAvatar,
+  optimizeAvatarToBuffer,
   base64ToBuffer,
   validateImage
 };
+

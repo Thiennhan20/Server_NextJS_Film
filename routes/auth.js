@@ -4,6 +4,7 @@ const { body } = require('express-validator');
 const auth = require('../middleware/auth');
 const optionalAuth = require('../middleware/optionalAuth');
 const avatarRateLimiter = require('../middleware/avatarRateLimiter');
+const adminApiKey = require('../middleware/adminApiKey');
 const authController = require('../controllers/authController');
 
 // Register route
@@ -92,17 +93,17 @@ router.delete('/watchlist', auth, authController.removeFromWatchlist);
 // Lấy toàn bộ watchlist của user
 router.get('/watchlist', auth, authController.getWatchlist);
 
-// ================= ADMIN API ENDPOINTS =================
+// ================= ADMIN API ENDPOINTS (Protected by adminApiKey) =================
 // Lấy tất cả users (cho Django Admin)
-router.get('/users', authController.getUsers);
+router.get('/users', adminApiKey, authController.getUsers);
 
 // Lấy user theo ID
-router.get('/users/:id', authController.getUserById);
+router.get('/users/:id', adminApiKey, authController.getUserById);
 
 // Cập nhật user theo ID
-router.put('/users/:id', authController.updateUser);
+router.put('/users/:id', adminApiKey, authController.updateUser);
 
 // Xóa user theo ID
-router.delete('/users/:id', authController.deleteUser);
+router.delete('/users/:id', adminApiKey, authController.deleteUser);
 
 module.exports = router;

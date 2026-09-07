@@ -5,7 +5,8 @@ const brevoSdk = require('@getbrevo/brevo');
 
 const brevoEmailApi = new brevoSdk.TransactionalEmailsApi();
 brevoEmailApi.setApiKey(brevoSdk.TransactionalEmailsApiApiKeys.apiKey, process.env.BREVO_API_KEY || '');
-const { optimizeAvatar } = require('../utils/avatarOptimizer');
+const { optimizeAvatar, optimizeAvatarToBuffer } = require('../utils/avatarOptimizer');
+const { uploadAvatar, isR2Configured } = require('./r2Service');
 const { RateLimiterMemory } = require('rate-limiter-flexible');
 
 // Rate limiter: 5 requests per 10 minutes per IP
@@ -15,14 +16,25 @@ const rateLimiter = new RateLimiterMemory({
 });
 
 // Helper function to download and optimize external avatar
-async function downloadAndOptimizeAvatar(avatarUrl) {
+async function downloadAndOptimizeAvatar(avatarUrl, userId = 'google') {
     try {
         if (!avatarUrl || !avatarUrl.startsWith('http')) {
             return avatarUrl;
         }
 
+        // If it's already an R2 URL, keep it
+        if (avatarUrl.includes('.r2.dev') || avatarUrl.includes('.r2.cloudflarestorage.com')) {
+            return avatarUrl;
+        }
+
+        // Request high-resolution version from Google if available
+        let downloadUrl = avatarUrl;
+        if (downloadUrl.includes('googleusercontent.com')) {
+            downloadUrl = downloadUrl.replace(/=s\d+(-c)?$/, '=s600-c');
+        }
+
         // Download avatar
-        const response = await axios.get(avatarUrl, {
+        const response = await axios.get(downloadUrl, {
             responseType: 'arraybuffer',
             timeout: 10000,
             headers: {
@@ -30,11 +42,19 @@ async function downloadAndOptimizeAvatar(avatarUrl) {
             }
         });
 
-        // Optimize with Sharp
-        const optimized = await optimizeAvatar(Buffer.from(response.data));
+        // Optimize to WebP buffer
+        const optimizedBuffer = await optimizeAvatarToBuffer(Buffer.from(response.data));
 
-        return optimized; // Returns base64 WebP
-    } catch {
+        // If R2 is configured, upload to Cloudflare R2
+        if (isR2Configured()) {
+            const r2Url = await uploadAvatar(optimizedBuffer, userId);
+            return r2Url;
+        }
+
+        // Fallback to base64 if R2 is not configured
+        return `data:image/webp;base64,${optimizedBuffer.toString('base64')}`;
+    } catch (err) {
+        console.warn('Failed to download and optimize external avatar:', err.message);
         // Return original URL as fallback
         return avatarUrl;
     }

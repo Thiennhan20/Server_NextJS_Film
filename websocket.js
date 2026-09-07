@@ -9,6 +9,7 @@ const { Server } = require('socket.io');
 const jwt = require('jsonwebtoken');
 const roomService = require('./services/roomService');
 const streamHistoryService = require('./services/streamHistoryService');
+const { allowedOrigins } = require('./config/cors');
 
 const GRACE_PERIOD_MS = 30000;   // 30 seconds
 const HEARTBEAT_TIMEOUT_MS = 45000; // 45 seconds (3 missed heartbeats)
@@ -25,7 +26,7 @@ const roomConnections = new Map();
 function initializeWebSocket(server) {
   const io = new Server(server, {
     cors: {
-      origin: ["https://moviesaw.vercel.app", "http://localhost:3000", "https://enterntn.duckdns.org", "https://www.enterntn.duckdns.org"],
+      origin: allowedOrigins,
       methods: ["GET", "POST"],
       credentials: true
     }

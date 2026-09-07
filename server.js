@@ -40,31 +40,11 @@ app.use(compression());
 app.use(cookieParser());
 
 // CORS configuration
-const corsOptions = {
-  origin: [
-    process.env.CLIENT_URL || 'http://localhost:3000',
-    'https://moviesaw.vercel.app',
-    'https://moviesaw.vercel.app/',
-    'https://enterntn.duckdns.org',
-    'https://enterntn.duckdns.org/',
-    'https://www.enterntn.duckdns.org',
-    'https://www.enterntn.duckdns.org/',
-    'http://localhost:3000',
-    'http://localhost:3001',
-    'http://localhost:3002',
-    'http://localhost:3002/',
-    'https://ntngame.fly.dev',
-    'https://ntngame.fly.dev/'
-  ],
-  credentials: true,
-  optionsSuccessStatus: 200,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
-};
+const { corsOptions } = require('./config/cors');
 app.use(cors(corsOptions));
-// Increase body size limit for avatar uploads (base64 images)
-app.use(express.json({ limit: '15mb' }));
-app.use(express.urlencoded({ limit: '15mb', extended: true }));
+// Increase body size limit for avatar uploads (base64 images up to 20MB)
+app.use(express.json({ limit: '25mb' }));
+app.use(express.urlencoded({ limit: '25mb', extended: true }));
 
 // MongoDB connection
 mongoose.connect(process.env.MONGODB_URI, {

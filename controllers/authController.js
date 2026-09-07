@@ -4,7 +4,8 @@ const User = require('../models/User');
 const WatchProgress = require('../models/WatchProgress');
 const BlacklistedToken = require('../models/BlacklistedToken');
 const Session = require('../models/Session');
-const { optimizeAvatar, base64ToBuffer, validateImage } = require('../utils/avatarOptimizer');
+const { optimizeAvatar, optimizeAvatarToBuffer, base64ToBuffer, validateImage } = require('../utils/avatarOptimizer');
+const { uploadAvatar, deleteAvatar, isR2Configured } = require('../services/r2Service');
 const authService = require('../services/authService');
 const PasswordResetToken = require('../models/PasswordResetToken');
 const crypto = require('crypto');
@@ -513,16 +514,18 @@ const googleLogin = async (req, res) => {
 
             // Cập nhật avatar và originalAvatar nếu cần
             if (avatar) {
-                // Nếu chưa có originalAvatar hoặc vẫn là URL (chưa optimize)
-                if (!user.originalAvatar || user.originalAvatar === '' || user.originalAvatar.startsWith('http')) {
-                    // Download và optimize avatar
-                    const optimizedAvatar = await authService.downloadAndOptimizeAvatar(avatar);
+                const isR2 = (url) => typeof url === 'string' && (url.includes('.r2.dev') || url.includes('.r2.cloudflarestorage.com'));
+
+                // Nếu chưa có originalAvatar hoặc chưa lưu trên R2
+                if (!user.originalAvatar || user.originalAvatar === '' || !isR2(user.originalAvatar)) {
+                    // Download và optimize avatar lên R2
+                    const optimizedAvatar = await authService.downloadAndOptimizeAvatar(avatar, user._id);
                     user.originalAvatar = optimizedAvatar;
                 }
 
                 // Chỉ cập nhật avatar nếu user chưa upload custom avatar
-                if (!user.avatar || user.avatar === '' || user.avatar.startsWith('http')) {
-                    user.avatar = user.originalAvatar; // Use cached optimized version
+                if (!user.avatar || user.avatar === '' || user.avatar === user.originalAvatar || !isR2(user.avatar)) {
+                    user.avatar = user.originalAvatar; // Dùng bản tối ưu R2
                 }
             }
             await user.save();
@@ -531,8 +534,8 @@ const googleLogin = async (req, res) => {
         }
 
         // Google user doesn't exist - REGISTER (create new)
-        // Download and optimize avatar first
-        const optimizedAvatar = avatar ? await authService.downloadAndOptimizeAvatar(avatar) : '';
+        // Download and optimize avatar first to R2
+        const optimizedAvatar = avatar ? await authService.downloadAndOptimizeAvatar(avatar, sub) : '';
 
         user = await User.findOneAndUpdate(
             { email, authType: 'google' },
@@ -841,13 +844,18 @@ const updateProfile = async (req, res) => {
         if (avatar !== undefined) {
             // Nếu avatar là empty string, khôi phục originalAvatar (nếu có)
             if (avatar === '') {
+                // Xóa custom avatar cũ trên R2 nếu có
+                if (user.avatar && user.avatar !== user.originalAvatar) {
+                    await deleteAvatar(user.avatar);
+                }
+
                 if (user.originalAvatar && user.originalAvatar !== '') {
                     user.avatar = user.originalAvatar;
                 } else {
                     user.avatar = '';
                 }
             }
-            // Nếu avatar là data URL, optimize nó
+            // Nếu avatar là data URL, optimize và upload lên Cloudflare R2
             else if (avatar.startsWith('data:image/')) {
                 try {
                     const imageBuffer = base64ToBuffer(avatar);
@@ -858,9 +866,22 @@ const updateProfile = async (req, res) => {
                         return res.status(400).json({ message: 'Invalid image format' });
                     }
 
-                    // Optimize to WebP
-                    const optimizedAvatar = await optimizeAvatar(imageBuffer);
-                    user.avatar = optimizedAvatar;
+                    // Optimize to WebP buffer
+                    const webpBuffer = await optimizeAvatarToBuffer(imageBuffer);
+
+                    // Xóa custom avatar cũ trên R2 nếu có
+                    if (user.avatar && user.avatar !== user.originalAvatar) {
+                        await deleteAvatar(user.avatar);
+                    }
+
+                    // Upload lên R2 nếu đã cấu hình
+                    if (isR2Configured()) {
+                        const r2Url = await uploadAvatar(webpBuffer, user._id);
+                        user.avatar = r2Url;
+                    } else {
+                        // Fallback sang base64 nếu R2 chưa bật
+                        user.avatar = `data:image/webp;base64,${webpBuffer.toString('base64')}`;
+                    }
                 } catch {
                     return res.status(400).json({ message: 'Failed to process avatar image' });
                 }
@@ -1228,14 +1249,24 @@ const googleMobileCallback = async (req, res) => {
             return sendResult({ error: 'no_email' });
         }
 
-        // Tìm hoặc tạo user (bỏ avatar optimization để tránh timeout)
+        // Tối ưu và upload avatar lên R2 nếu có
+        let optimizedAvatar = avatar || '';
+        if (avatar && avatar.startsWith('http')) {
+            try {
+                optimizedAvatar = await authService.downloadAndOptimizeAvatar(avatar, sub);
+            } catch {
+                optimizedAvatar = avatar;
+            }
+        }
+
+        // Tìm hoặc tạo user
         let user = await User.findOne({ email, authType: 'google' });
 
         if (user) {
             if (name && user.name !== name) user.name = name;
-            if (avatar && (!user.avatar || user.avatar === '')) {
-                user.avatar = avatar;
-                user.originalAvatar = avatar;
+            if (optimizedAvatar && (!user.avatar || user.avatar === '' || user.avatar.startsWith('http://') || user.avatar.includes('googleusercontent.com'))) {
+                user.avatar = optimizedAvatar;
+                user.originalAvatar = optimizedAvatar;
             }
             await user.save();
         } else {
@@ -1246,8 +1277,8 @@ const googleMobileCallback = async (req, res) => {
                     email,
                     authType: 'google',
                     providerId: sub,
-                    avatar: avatar || '',
-                    originalAvatar: avatar || '',
+                    avatar: optimizedAvatar,
+                    originalAvatar: optimizedAvatar,
                     isEmailVerified: !!email_verified,
                     emailVerificationToken: ''
                 },
