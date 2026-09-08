@@ -81,6 +81,7 @@ function parseUserAgent(uaString) {
     else if (/iphone|ipad|ipod/i.test(uaString)) os = 'iOS';
     else if (/android/i.test(uaString)) os = 'Android';
     else if (/linux/i.test(uaString)) os = 'Linux';
+    else if (/darwin/i.test(uaString)) os = 'iOS';
 
     let browser = 'Unknown Browser';
     if (/edg/i.test(uaString)) browser = 'Edge';
@@ -88,6 +89,7 @@ function parseUserAgent(uaString) {
     else if (/firefox|fxios/i.test(uaString)) browser = 'Firefox';
     else if (/safari/i.test(uaString) && !/chrome|crios|android/i.test(uaString)) browser = 'Safari';
     else if (/opr/i.test(uaString)) browser = 'Opera';
+    else if (/okhttp|cfnetwork|expo|react-?native|ntn/i.test(uaString)) browser = 'NTN App';
 
     return `${browser} on ${os}`;
 }

@@ -58,6 +58,7 @@ const auth = async (req, res, next) => {
     
     req.user = decoded.userId; // Chỉ gán userId để tương thích với code hiện tại
     req.token = token; // Attach token to request (for logout later)
+    req.sessionId = decoded.sessionId;
     next();
   } catch (error) {
     console.error('Auth middleware error:', error);

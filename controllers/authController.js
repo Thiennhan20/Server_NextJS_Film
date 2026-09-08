@@ -699,6 +699,7 @@ const getSessions = async (req, res) => {
     try {
         const userId = req.user;
         const currentRefreshToken = req.cookies?.refreshToken;
+        const currentSessionId = req.sessionId ? String(req.sessionId) : (req.query?.sessionId ? String(req.query.sessionId) : null);
         
         const sessions = await Session.find({ userId }).sort({ lastActive: -1 });
         
@@ -708,7 +709,10 @@ const getSessions = async (req, res) => {
             ip: session.ip,
             location: session.location || 'Unknown Location',
             lastActive: session.lastActive,
-            isCurrent: session.refreshToken === currentRefreshToken
+            isCurrent: Boolean(
+                (currentSessionId && String(session._id) === currentSessionId) ||
+                (currentRefreshToken && session.refreshToken === currentRefreshToken)
+            )
         }));
         
         res.json(mappedSessions);
@@ -739,15 +743,20 @@ const revokeAllOtherSessions = async (req, res) => {
     try {
         const userId = req.user;
         const currentRefreshToken = req.cookies?.refreshToken;
+        const currentSessionId = req.sessionId || req.body?.sessionId || req.query?.sessionId;
         
-        if (!currentRefreshToken) {
+        if (!currentRefreshToken && !currentSessionId) {
             return res.status(400).json({ message: 'Current session identifier missing' });
         }
         
-        await Session.deleteMany({
-            userId,
-            refreshToken: { $ne: currentRefreshToken }
-        });
+        const filter = { userId };
+        if (currentSessionId) {
+            filter._id = { $ne: currentSessionId };
+        } else if (currentRefreshToken) {
+            filter.refreshToken = { $ne: currentRefreshToken };
+        }
+        
+        await Session.deleteMany(filter);
         
         res.json({ message: 'All other sessions revoked successfully' });
     } catch (err) {
@@ -1286,8 +1295,26 @@ const googleMobileCallback = async (req, res) => {
             );
         }
 
-        // Tạo JWT token
-        const token = authService.createToken(user._id);
+        // Tạo Session & JWT token
+        const sessionId = new (require('mongoose').Types.ObjectId)();
+        const token = authService.createToken(user._id, sessionId);
+        const refreshToken = crypto.randomBytes(40).toString('hex');
+        const userAgent = req.headers['user-agent'] || '';
+        const device = authService.parseUserAgent(userAgent);
+        const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || req.ip || '';
+        const location = await authService.getLocationFromIP(ip);
+        const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+
+        await Session.create({
+            _id: sessionId,
+            userId: user._id,
+            refreshToken,
+            userAgent,
+            device,
+            ip,
+            location,
+            expiresAt
+        });
 
         // Trả về HTML page sẽ redirect về app bằng JavaScript
         console.log('Google login success for:', email);
