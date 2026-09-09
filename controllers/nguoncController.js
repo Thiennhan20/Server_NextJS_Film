@@ -26,9 +26,9 @@ const searchTVShow = async (req, res) => {
         if (detail && detail.episodes) {
             const rawLinks = nguoncService.extractLinksForEpisode(detail.episodes, selectedEpisode);
             const links = {
-                vietsub: rawLinks.vietsub ? makeProxyEmbedUrl(rawLinks.vietsub, req) : '',
-                dubbed: rawLinks.dubbed ? makeProxyEmbedUrl(rawLinks.dubbed, req) : '',
-                m3u8: rawLinks.m3u8 ? makeProxyEmbedUrl(rawLinks.m3u8, req) : ''
+                vietsub: rawLinks.vietsub || '',
+                dubbed: rawLinks.dubbed || '',
+                m3u8: rawLinks.m3u8 || ''
             };
 
             return res.json({ status: 'success', data: { detail, links } });
@@ -83,9 +83,9 @@ const searchMovie = async (req, res) => {
         if (detail) {
             const rawLinks = nguoncService.extractMovieLinks(detail);
             const links = {
-                vietsub: rawLinks.vietsub ? makeProxyEmbedUrl(rawLinks.vietsub, req) : '',
-                dubbed: rawLinks.dubbed ? makeProxyEmbedUrl(rawLinks.dubbed, req) : '',
-                m3u8: rawLinks.m3u8 ? makeProxyEmbedUrl(rawLinks.m3u8, req) : ''
+                vietsub: rawLinks.vietsub || '',
+                dubbed: rawLinks.dubbed || '',
+                m3u8: rawLinks.m3u8 || ''
             };
 
             return res.json({ status: 'success', data: { detail, links } });
@@ -251,8 +251,34 @@ const embedProxy = async (req, res) => {
         res.setHeader('Cache-Control', 'no-store');
         res.send(html);
     } catch (err) {
-        console.error('[Embed Proxy Error]:', err.message);
-        res.status(500).send('Embed proxy error: ' + err.message);
+        console.warn('[Embed Proxy Fallback to direct iframe]:', err.message);
+        res.removeHeader('X-Frame-Options');
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Cache-Control', 'no-store');
+        res.send(`
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <meta name="referrer" content="origin">
+            <style>
+                html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
+                iframe { width: 100%; height: 100%; border: none; }
+            </style>
+        </head>
+        <body>
+            <iframe
+                src="${embedUrl}"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+                allowfullscreen
+                webkitallowfullscreen
+                referrerpolicy="origin"
+            ></iframe>
+        </body>
+        </html>
+        `);
     }
 };
 
@@ -400,8 +426,8 @@ const streamUrl = async (req, res) => {
             origin: parsed.origin
         });
     } catch (err) {
-        console.error('[StreamUrl Error]:', err.message);
-        res.status(500).json({ error: 'Stream extraction failed', message: err.message });
+        console.warn('[StreamUrl Info]: Direct stream extraction bypassed:', err.message);
+        res.json({ status: 'fallback', message: 'Stream extraction bypassed, direct embed player should be used' });
     }
 };
 
