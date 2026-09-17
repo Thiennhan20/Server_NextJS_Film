@@ -130,6 +130,21 @@ function parseEpisodePlaylist(value) {
   }
 }
 
+function inferContentType(contentType, title, season, episode, playlist) {
+  if (contentType === 'tvshow') return 'tvshow';
+  if (contentType === 'movie') return 'movie';
+  const hasSeason = Number.isFinite(Number(season)) && Number(season) > 0;
+  const hasEpisode = Number.isFinite(Number(episode)) && Number(episode) > 0;
+  const hasPlaylist = Array.isArray(playlist) && playlist.length > 0;
+  const matchTvPattern = /\b(s\d+\s*e\d+|s\d+|e\d+|ep\s*\d+|ep\.\d+|season\s*\d+|tập\s*\d+|episode\s*\d+|ss\d+|ss\s*\d+)\b/i.test(title || '') ||
+    /[-_\s](s\d+|e\d+|ep\d+|tập\s*\d+)/i.test(title || '');
+
+  if (hasSeason || hasEpisode || hasPlaylist || matchTvPattern) {
+    return 'tvshow';
+  }
+  return 'movie';
+}
+
 function hasRoomPlayed(data) {
   const status = data?.status || 'WAITING';
   return data?.has_played === 'true' ||
@@ -192,7 +207,7 @@ async function normalizeEmptyRoomStatus(roomId, roomData = null, memberCount = n
  * @param {string} params.title - Movie/show title
  * @returns {{ success: boolean, roomId?: string, error?: string }}
  */
-async function createRoom({ hostId, hostName, hostAvatar, streamUrl, title, movieId, audio, contentType, season, episode, episodePlaylist }) {
+async function createRoom({ hostId, hostName, hostAvatar, streamUrl, title, movieId, audio, contentType, season, episode, episodePlaylist, poster }) {
   // Check capacity limit
   const activeCount = await countActiveRooms();
   if (activeCount >= MAX_CONCURRENT_ROOMS) {
@@ -234,10 +249,10 @@ async function createRoom({ hostId, hostName, hostAvatar, streamUrl, title, movi
   }
 
   const now = Date.now();
-  const sanitizedContentType = contentType === 'tvshow' ? 'tvshow' : contentType === 'movie' ? 'movie' : '';
   const sanitizedSeason = Number.isFinite(Number(season)) && Number(season) > 0 ? String(Number(season)) : '';
   const sanitizedEpisode = Number.isFinite(Number(episode)) && Number(episode) > 0 ? String(Number(episode)) : '';
   const sanitizedPlaylist = sanitizeEpisodePlaylist(episodePlaylist);
+  const sanitizedContentType = inferContentType(contentType, title, sanitizedSeason, sanitizedEpisode, sanitizedPlaylist);
   const roomData = {
     host_id: hostId,
     host_name: hostName,
@@ -245,6 +260,7 @@ async function createRoom({ hostId, hostName, hostAvatar, streamUrl, title, movi
     stream_url: streamUrl || '',
     title: title || '',
     movie_id: movieId || '',
+    poster: poster || '',
     audio: audio || '',
     content_type: sanitizedContentType,
     season: sanitizedSeason,
@@ -289,8 +305,9 @@ async function getRoom(roomId) {
     stream_url: data.stream_url,
     title: data.title,
     movie_id: data.movie_id || '',
+    poster: data.poster || '',
     audio: data.audio || '',
-    content_type: data.content_type || '',
+    content_type: inferContentType(data.content_type, data.title, data.season, data.current_episode, data.episode_playlist),
     season: data.season ? parseInt(data.season) || null : null,
     current_episode: data.current_episode ? parseInt(data.current_episode) || null : null,
     episode_playlist: parseEpisodePlaylist(data.episode_playlist),
@@ -549,10 +566,12 @@ async function listActiveRooms() {
       rooms.push({
         room_id: roomId,
         title: data.title || '',
+        movie_id: data.movie_id || '',
+        poster: data.poster || '',
         host_id: data.host_id,
         host_name: data.host_name || 'Host',
         host_avatar: data.host_avatar || '',
-        content_type: data.content_type || '',
+        content_type: inferContentType(data.content_type, data.title, data.season, data.current_episode, null),
         season: data.season ? parseInt(data.season) || null : null,
         current_episode: data.current_episode ? parseInt(data.current_episode) || null : null,
         status: normalized?.status || data.status || 'WAITING',

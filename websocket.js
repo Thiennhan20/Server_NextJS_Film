@@ -233,6 +233,7 @@ function initializeWebSocket(server) {
         season: room.season || null,
         current_episode: room.current_episode || null,
         episode_playlist: room.episode_playlist || [],
+        movie_id: room.movie_id || '',
       };
 
       // Host gets stream_url, viewer gets it via WebSocket (needed for HLS.js)

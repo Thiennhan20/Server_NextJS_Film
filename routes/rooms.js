@@ -12,6 +12,10 @@ const router = express.Router();
 const auth = require('../middleware/auth');
 const roomService = require('../services/roomService');
 const streamHistoryService = require('../services/streamHistoryService');
+const redisClient = require('../config/redis');
+
+const COMMUNITY_PICKS_CACHE_KEY = 'cache:community_picks';
+const COMMUNITY_PICKS_TTL = 8 * 3600; // 8 hours (28,800 seconds)
 
 // ─── GET /api/rooms/public — Public listing (no auth required) ──
 router.get('/public', async (req, res) => {
@@ -21,6 +25,7 @@ router.get('/public', async (req, res) => {
     const publicRooms = rooms.map(r => ({
       room_id: r.room_id,
       title: r.title,
+      poster: r.poster || '',
       host_name: r.host_name,
       host_avatar: r.host_avatar,
       host_id: r.host_id,
@@ -29,6 +34,10 @@ router.get('/public', async (req, res) => {
       max_users: r.max_users,
       created_at: r.created_at,
       ttl_seconds: r.ttl_seconds,
+      content_type: r.content_type || '',
+      season: r.season || null,
+      current_episode: r.current_episode || null,
+      movie_id: r.movie_id || '',
     }));
     res.json({
       rooms: publicRooms,
@@ -37,6 +46,142 @@ router.get('/public', async (req, res) => {
   } catch (error) {
     console.error('Public list rooms error:', error);
     res.status(500).json({ error: 'Failed to list rooms.' });
+  }
+});
+
+// ─── GET /api/rooms/community-picks — 10 random community movies for Quick Pick & Create (Public & Secure) ──
+router.get('/community-picks', async (req, res) => {
+  try {
+    const isRefresh = req.query.refresh === 'true';
+
+    // 1. Check Redis cache first (if not force-refreshing)
+    if (!isRefresh) {
+      try {
+        const cached = await redisClient.get(COMMUNITY_PICKS_CACHE_KEY);
+        if (cached) {
+          const items = typeof cached === 'string' ? JSON.parse(cached) : cached;
+          if (Array.isArray(items) && items.length > 0) {
+            return res.json({
+              success: true,
+              items,
+              cached: true,
+            });
+          }
+        }
+      } catch (redisErr) {
+        console.warn('Redis GET community-picks cache error:', redisErr.message);
+      }
+    }
+
+    const WatchProgress = require('../models/WatchProgress');
+    const StreamHistory = require('../models/StreamHistory');
+
+    // 1. Sample from WatchProgress grouped by title to ensure distinct movies from different users
+    const wpPicks = await WatchProgress.aggregate([
+      { 
+        $match: { 
+          watchUrl: { $regex: '^https?://' },
+          title: { $exists: true, $ne: '' }
+        } 
+      },
+      { $sample: { size: 35 } },
+      {
+        $group: {
+          _id: { $toLower: '$title' },
+          contentId: { $first: '$contentId' },
+          title: { $first: '$title' },
+          poster: { $first: '$poster' },
+          streamUrl: { $first: '$watchUrl' },
+          type: { $first: { $cond: [{ $eq: ['$isTVShow', true] }, 'tvshow', 'movie'] } },
+          season: { $first: '$season' },
+          episode: { $first: '$episode' },
+          audio: { $first: '$audio' }
+        }
+      },
+      { $sample: { size: 10 } }
+    ]);
+
+    const cleanPoster = (url) => {
+      if (!url) return '';
+      if (url.lastIndexOf('http') > 0) {
+        return url.substring(url.lastIndexOf('http'));
+      }
+      return url;
+    };
+
+    let combined = wpPicks.map(p => ({
+      id: `pick-${p.contentId || p.title}`,
+      movieId: String(p.contentId || ''),
+      title: p.title,
+      poster: cleanPoster(p.poster),
+      streamUrl: p.streamUrl,
+      type: p.type || 'movie',
+      season: p.season ?? null,
+      episode: p.episode ?? null,
+      audio: p.audio || ''
+    }));
+
+    // 2. If fewer than 10, fill in from StreamHistory
+    if (combined.length < 10) {
+      const seenTitles = new Set(combined.map(c => c.title.toLowerCase()));
+      const shPicks = await StreamHistory.aggregate([
+        {
+          $match: {
+            streamUrl: { $regex: '^https?://' },
+            title: { $exists: true, $ne: '' }
+          }
+        },
+        { $sample: { size: 25 } },
+        {
+          $group: {
+            _id: { $toLower: '$title' },
+            movieId: { $first: '$movieId' },
+            title: { $first: '$title' },
+            poster: { $first: '$poster' },
+            streamUrl: { $first: '$streamUrl' },
+            type: { $first: { $cond: [{ $eq: ['$contentType', 'tvshow'] }, 'tvshow', 'movie'] } },
+            season: { $first: '$season' },
+            episode: { $first: '$episode' },
+            audio: { $first: '$audio' }
+          }
+        }
+      ]);
+
+      for (const sh of shPicks) {
+        if (!seenTitles.has(sh.title.toLowerCase()) && combined.length < 10) {
+          seenTitles.add(sh.title.toLowerCase());
+          combined.push({
+            id: `pick-${sh.movieId || sh.title}`,
+            movieId: String(sh.movieId || ''),
+            title: sh.title,
+            poster: cleanPoster(sh.poster),
+            streamUrl: sh.streamUrl,
+            type: sh.type || 'movie',
+            season: sh.season ?? null,
+            episode: sh.episode ?? null,
+            audio: sh.audio || ''
+          });
+        }
+      }
+    }
+
+    // 3. Save to Redis cache for 8 hours
+    if (Array.isArray(combined) && combined.length > 0) {
+      try {
+        await redisClient.set(COMMUNITY_PICKS_CACHE_KEY, combined, COMMUNITY_PICKS_TTL);
+      } catch (redisErr) {
+        console.warn('Redis SET community-picks cache error:', redisErr.message);
+      }
+    }
+
+    res.json({
+      success: true,
+      items: combined,
+      cached: false,
+    });
+  } catch (error) {
+    console.error('Community picks error:', error);
+    res.status(500).json({ error: 'Failed to get community picks.' });
   }
 });
 
@@ -145,6 +290,7 @@ router.post('/', auth, async (req, res) => {
       season: season || '',
       episode: episode || '',
       episodePlaylist: episode_playlist || [],
+      poster: poster || '',
     });
 
     if (!result.success) {
@@ -220,6 +366,7 @@ router.get('/:id', auth, async (req, res) => {
       season: room.season,
       current_episode: room.current_episode,
       episode_playlist: room.episode_playlist || [],
+      movie_id: room.movie_id || '',
     };
 
     // Only host can see stream_url via REST
