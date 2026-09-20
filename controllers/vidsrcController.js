@@ -5,35 +5,123 @@ const axios = require('axios');
 const subSearchCache = new Map();
 const SUB_CACHE_TTL = 6 * 60 * 60 * 1000; // 6 hours
 
-// Controller: Simply return the active VidSrc domain configured by Django Admin
-const getActiveDomain = async (req, res) => {
+// In-memory cache for verified healthy domain
+let cachedLiveDomain = null;
+let lastLiveDomainCheck = 0;
+const LIVE_DOMAIN_TTL = 3 * 60 * 1000; // 3 minutes cache
+
+// Deep health check for a VidSrc domain
+const checkDomainHealth = async (domainUrl, timeoutMs = 3000) => {
+    if (!domainUrl || typeof domainUrl !== 'string') return false;
+    const cleanDomain = domainUrl.replace(/\/$/, '');
     try {
-        const db = mongoose.connection.db;
-        if (db) {
-            const settings = await db.collection('systemsettings').findOne({ key: 'vidsrc_config' });
-            if (settings && settings.active_domain) {
-                let domain = settings.active_domain;
-                if (domain.includes('vidsrc-me.ru') || domain.includes('vidsrcme.ru')) {
-                    domain = 'https://vidsrcme.su';
-                }
-                return res.json({
-                    ok: true,
-                    active_domain: domain,
-                    auto_update: settings.auto_update || false
-                });
-            }
-        }
-        return res.json({ ok: true, active_domain: 'https://vidsrcme.su' });
-    } catch (error) {
-        console.error('Error reading active vidsrc domain:', error);
-        return res.json({ ok: true, active_domain: 'https://vidsrcme.su' });
+        const tokenRes = await axios.get(`${cleanDomain}/vs_src.php?type=movie&id=550`, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+                'Referer': `${cleanDomain}/embed/movie?tmdb=550`
+            },
+            timeout: timeoutMs
+        });
+        const cloudUrl = tokenRes.data?.src;
+        if (!cloudUrl) return false;
+
+        const cloudRes = await axios.get(cloudUrl, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+                'Referer': `${cleanDomain}/`
+            },
+            timeout: timeoutMs
+        });
+
+        const isExpired = cloudRes.status === 403 ||
+            (typeof cloudRes.data === 'string' && (cloudRes.data.includes('Session expired') || cloudRes.data.includes('<title>Expired</title>')));
+        return cloudRes.status === 200 && !isExpired;
+    } catch (err) {
+        return false;
     }
 };
 
-const VIDSRC_WHITELIST_PATTERN = /(?:localhost|127\.0\.0\.1|vidsrcme\.su|vidsrc\.[a-z0-9-]+|cloudorchestranova\.com|vidsrcme\.ru|vidapi\.cloud|comityofcognomen\.site|epexegesisengine\.site|propinquitypostulate\.website|ataraxiaoftheapex\.space|zenithofzircon\.space|onomatopoeiaoverture\.website|vercel\.app|onrender\.com|\.(?:site|website|space|su|ru)|tmdb\.org|themoviedb\.org|opensubtitles\.org|opensubtitles\.com|subscene\.com|osdb\.link|subdl\.com|statically\.io|cloudfront\.net|fastly\.net|jwplayer\.com|jwpcdn\.com|cloudflare\.com|jsdelivr\.net|gstatic\.com)/i;
+// Controller: Return the active VidSrc domain and backup domains after live health verification
+const getActiveDomain = async (req, res) => {
+    try {
+        const db = mongoose.connection.db;
+        let activeDomain = '';
+        let backupDomains = [];
+        let autoUpdate = false;
+
+        if (db) {
+            const settings = await db.collection('systemsettings').findOne({ key: 'vidsrc_config' });
+            if (settings) {
+                activeDomain = settings.active_domain || '';
+                backupDomains = settings.backup_domains || [];
+                autoUpdate = settings.auto_update || false;
+            }
+        }
+
+        // Build candidate domain list
+        const rawCandidates = [activeDomain, ...backupDomains].filter(d => d && typeof d === 'string');
+        const candidates = Array.from(new Set(rawCandidates.map(d => d.replace(/\/$/, ''))));
+
+        // 1. Fast path: return cached live domain if recently validated
+        if (cachedLiveDomain && (Date.now() - lastLiveDomainCheck < LIVE_DOMAIN_TTL) && candidates.includes(cachedLiveDomain)) {
+            return res.json({
+                ok: true,
+                active_domain: cachedLiveDomain,
+                backup_domains: candidates.filter(d => d !== cachedLiveDomain),
+                auto_update: autoUpdate
+            });
+        }
+
+        // 2. Sequential health check across all candidates
+        for (const candidate of candidates) {
+            const isAlive = await checkDomainHealth(candidate, 3000);
+            if (isAlive) {
+                cachedLiveDomain = candidate;
+                lastLiveDomainCheck = Date.now();
+                return res.json({
+                    ok: true,
+                    active_domain: candidate,
+                    backup_domains: candidates.filter(d => d !== candidate),
+                    auto_update: autoUpdate
+                });
+            }
+        }
+
+        // 3. If all candidate domains failed after checking every single one
+        cachedLiveDomain = null;
+        return res.json({
+            ok: false,
+            active_domain: null,
+            backup_domains: [],
+            error: 'No working domain found'
+        });
+    } catch (error) {
+        console.error('Error reading active vidsrc domain:', error);
+        return res.json({
+            ok: false,
+            active_domain: null,
+            backup_domains: [],
+            error: error.message
+        });
+    }
+};
+
+const VIDSRC_WHITELIST_PATTERN = /(?:localhost|127\.0\.0\.1|vidsrc2\.ru|vidsrcme\.su|vidsrc\.[a-z0-9-]+|cloudorchestranova\.com|vidsrcme\.ru|vidapi\.cloud|comityofcognomen\.site|epexegesisengine\.site|propinquitypostulate\.website|ataraxiaoftheapex\.space|zenithofzircon\.space|onomatopoeiaoverture\.website|vercel\.app|onrender\.com|\.(?:site|website|space|su|ru)|tmdb\.org|themoviedb\.org|opensubtitles\.org|opensubtitles\.com|subscene\.com|osdb\.link|subdl\.com|statically\.io|cloudfront\.net|fastly\.net|jwplayer\.com|jwpcdn\.com|cloudflare\.com|jsdelivr\.net|gstatic\.com)/i;
 const STREAM_TLD_REGEX = /\.(?:site|website|space|su|ru)$/i;
 
-// VidSrc Embed Proxy (Ad-blocking, Whitelist, Referer Bypassing)
+// Helper to build axios headers
+const buildEmbedHeaders = (referer, origin) => ({
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+    'Accept-Language': 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
+    'Referer': referer,
+    'Origin': origin,
+    'Sec-Ch-Ua': '"Google Chrome";v="125", "Chromium";v="125", "Not.A/Brand";v="24"',
+    'Sec-Ch-Ua-Mobile': '?0',
+    'Sec-Ch-Ua-Platform': '"Windows"',
+});
+
+// VidSrc Embed Proxy (Ad-blocking, Whitelist, Referer Bypassing, Auto-failover)
 const embedProxy = async (req, res) => {
     const embedUrl = req.query.url;
     if (!embedUrl) {
@@ -48,8 +136,9 @@ const embedProxy = async (req, res) => {
 
     try {
         let targetEmbedUrl = embedUrl;
-        if (targetEmbedUrl.includes('/embed/movie') || targetEmbedUrl.includes('/embed/tv')) {
-            targetEmbedUrl = targetEmbedUrl.replace(/https?:\/\/(?:vidsrc\.[a-z0-9-]+|vidsrcme\.su|vidsrcme\.ru)/i, 'https://vidsrcme.su');
+        // Protect old cached URLs: automatically map dead/expired domains to verified live domain if available
+        if (cachedLiveDomain && (targetEmbedUrl.includes('/embed/movie') || targetEmbedUrl.includes('/embed/tv'))) {
+            targetEmbedUrl = targetEmbedUrl.replace(/https?:\/\/(?:vidsrcme\.su|vidsrc\.gd|vidsrc\.me|vidsrc\.bz|vidsrc-embed\.(?:su|ru))/i, cachedLiveDomain);
         }
         // Clean ds_lang parameter if it contains encoded comma (%2C or ,) to avoid Cloudflare 403 Forbidden WAF blocks
         if (targetEmbedUrl.includes('ds_lang=')) {
@@ -59,32 +148,67 @@ const embedProxy = async (req, res) => {
             });
         }
 
-        const parsed = new URL(targetEmbedUrl);
+        let parsed = new URL(targetEmbedUrl);
 
         const customRef = req.query.ref;
         let refererHeader = customRef ? (customRef.endsWith('/') ? customRef : customRef + '/') : `${parsed.origin}/`;
-        if (customRef) {
-            refererHeader = customRef.endsWith('/') ? customRef : customRef + '/';
-        } else if (targetEmbedUrl.includes('cloudorchestranova.com/embed/movie') || targetEmbedUrl.includes('cloudorchestranova.com/embed/tv')) {
-            refererHeader = 'https://vidsrcme.su/';
-        } else if (targetEmbedUrl.includes('cloudorchestranova.com/embed/player')) {
+        if (targetEmbedUrl.includes('cloudorchestranova.com/embed/player')) {
             refererHeader = 'https://cloudorchestranova.com/';
+        } else if (targetEmbedUrl.includes('cloudorchestranova.com')) {
+            if (customRef && !customRef.includes('vidsrcme.su') && !customRef.includes('vidsrc.gd')) {
+                refererHeader = customRef.endsWith('/') ? customRef : customRef + '/';
+            } else {
+                refererHeader = cachedLiveDomain ? (cachedLiveDomain.endsWith('/') ? cachedLiveDomain : cachedLiveDomain + '/') : `${parsed.origin}/`;
+            }
         }
 
-        const embedRes = await axios.get(targetEmbedUrl, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-                'Accept-Language': 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
-                'Referer': refererHeader,
-                'Origin': parsed.origin,
-                'Sec-Ch-Ua': '"Google Chrome";v="125", "Chromium";v="125", "Not.A/Brand";v="24"',
-                'Sec-Ch-Ua-Mobile': '?0',
-                'Sec-Ch-Ua-Platform': '"Windows"',
-            },
-            timeout: 15000,
-            responseType: 'text'
-        });
+        let embedRes;
+        try {
+            embedRes = await axios.get(targetEmbedUrl, {
+                headers: buildEmbedHeaders(refererHeader, parsed.origin),
+                timeout: 15000,
+                responseType: 'text'
+            });
+        } catch (initialErr) {
+            // Real-time failover: if primary domain fails on embed page, try backup domains
+            const isEmbedPage = targetEmbedUrl.includes('/embed/movie') || targetEmbedUrl.includes('/embed/tv');
+            if (isEmbedPage) {
+                let fallbackDomains = [];
+                try {
+                    const db = mongoose.connection.db;
+                    if (db) {
+                        const settings = await db.collection('systemsettings').findOne({ key: 'vidsrc_config' });
+                        if (settings && settings.backup_domains && settings.backup_domains.length > 0) {
+                            fallbackDomains = settings.backup_domains;
+                        }
+                    }
+                } catch(dbErr) {}
+
+                if (cachedLiveDomain && !fallbackDomains.includes(cachedLiveDomain)) {
+                    fallbackDomains.unshift(cachedLiveDomain);
+                }
+
+                for (const fbDomain of fallbackDomains) {
+                    if (targetEmbedUrl.startsWith(fbDomain)) continue;
+                    try {
+                        const fallbackUrl = targetEmbedUrl.replace(/^https?:\/\/[^/]+/i, fbDomain);
+                        embedRes = await axios.get(fallbackUrl, {
+                            headers: buildEmbedHeaders(fbDomain + '/', fbDomain),
+                            timeout: 8000,
+                            responseType: 'text'
+                        });
+                        if (embedRes && embedRes.status === 200) {
+                            targetEmbedUrl = fallbackUrl;
+                            parsed = new URL(targetEmbedUrl);
+                            break;
+                        }
+                    } catch (fbErr) {
+                        // Continue to next fallback
+                    }
+                }
+            }
+            if (!embedRes) throw initialErr;
+        }
 
         let html = embedRes.data;
 
@@ -501,12 +625,69 @@ const embedProxy = async (req, res) => {
         res.setHeader('Cache-Control', 'no-store');
         res.send(html);
     } catch (err) {
-        const statusCode = err.response ? err.response.status : 500;
-        console.error(`[vidsrc-embed-proxy] ❌ Error (${statusCode}) for ${embedUrl}:`, err.message);
-        if (err.response) {
-            console.error(`[vidsrc-embed-proxy] Status Details: ${err.response.status} ${err.response.statusText}`);
-        }
-        res.status(statusCode).send('VidSrc embed proxy error: ' + err.message);
+        res.removeHeader('X-Frame-Options');
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.status(200).send(`<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Server 2</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 0;
+      width: 100vw;
+      height: 100vh;
+      background: #0b0f19;
+      color: #ffffff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      text-align: center;
+    }
+    .error-card {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+      padding: 24px;
+      max-width: 420px;
+    }
+    .error-icon {
+      width: 48px;
+      height: 48px;
+      color: #f59e0b;
+    }
+    .error-title {
+      font-size: 18px;
+      font-weight: 600;
+      line-height: 1.3;
+    }
+    .error-subtitle {
+      font-size: 14px;
+      color: #9ca3af;
+    }
+  </style>
+</head>
+<body>
+  <div class="error-card">
+    <svg class="error-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+    </svg>
+    <div class="error-title">Không có nguồn video nào khả dụng</div>
+    <div class="error-subtitle">Vui lòng thử máy chủ khác</div>
+  </div>
+  <script>
+    try {
+      window.parent.postMessage({ type: 'VIDSRC_STREAM_ERROR' }, '*');
+    } catch(e) {}
+  </script>
+</body>
+</html>`);
     }
 };
 

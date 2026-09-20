@@ -444,6 +444,18 @@ function initializeWebSocket(server) {
       if (!currentRoomId) return;
       if (!message || typeof message !== 'string' || message.trim().length === 0) return;
 
+      // Rate limit: tối đa 3 tin nhắn trong 2 giây
+      const now = Date.now();
+      if (!socket.chatRateLimit || now > socket.chatRateLimit.resetTime) {
+        socket.chatRateLimit = { count: 1, resetTime: now + 2000 };
+      } else {
+        socket.chatRateLimit.count += 1;
+        if (socket.chatRateLimit.count > 3) {
+          socket.emit('ERROR', { message: 'Bạn đang gửi tin nhắn quá nhanh. Vui lòng chậm lại một chút!' });
+          return;
+        }
+      }
+
       wpNamespace.to(`room:${currentRoomId}`).emit('CHAT', {
         user_id: socket.userId,
         username: socket.username,
@@ -457,6 +469,18 @@ function initializeWebSocket(server) {
     socket.on('EMOJI_REACTION', ({ emoji }) => {
       if (!currentRoomId) return;
       if (!emoji) return;
+
+      // Rate limit: tối đa 5 emoji trong 2 giây
+      const now = Date.now();
+      if (!socket.emojiRateLimit || now > socket.emojiRateLimit.resetTime) {
+        socket.emojiRateLimit = { count: 1, resetTime: now + 2000 };
+      } else {
+        socket.emojiRateLimit.count += 1;
+        if (socket.emojiRateLimit.count > 5) {
+          socket.emit('ERROR', { message: 'Thả cảm xúc chậm lại một chút nhé!' });
+          return;
+        }
+      }
 
       wpNamespace.to(`room:${currentRoomId}`).emit('EMOJI_REACTION', {
         user_id: socket.userId,
