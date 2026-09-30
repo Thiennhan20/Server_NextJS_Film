@@ -10,6 +10,7 @@
  */
 
 const redis = require('../config/redis');
+const bcrypt = require('bcrypt');
 
 const ROOM_TTL = 21600; // 6 hours in seconds
 const MAX_USERS = 2;
@@ -207,7 +208,7 @@ async function normalizeEmptyRoomStatus(roomId, roomData = null, memberCount = n
  * @param {string} params.title - Movie/show title
  * @returns {{ success: boolean, roomId?: string, error?: string }}
  */
-async function createRoom({ hostId, hostName, hostAvatar, streamUrl, title, movieId, audio, contentType, season, episode, episodePlaylist, poster }) {
+async function createRoom({ hostId, hostName, hostAvatar, streamUrl, title, movieId, audio, contentType, season, episode, episodePlaylist, poster, password }) {
   // Check capacity limit
   const activeCount = await countActiveRooms();
   if (activeCount >= MAX_CONCURRENT_ROOMS) {
@@ -274,6 +275,17 @@ async function createRoom({ hostId, hostName, hostAvatar, streamUrl, title, movi
     has_played: 'false',
   };
 
+  // If password provided, validate 6-digit PIN format and hash with bcrypt
+  if (password && typeof password === 'string' && password.trim().length > 0) {
+    const cleanPin = password.trim();
+    if (!/^\d{6}$/.test(cleanPin)) {
+      return { success: false, error: 'Mã PIN phòng phải gồm đúng 6 chữ số.' };
+    }
+    const passwordHash = await bcrypt.hash(cleanPin, 10);
+    roomData.password_hash = passwordHash;
+    roomData.pin = cleanPin;
+  }
+
   // Create room hash
   await redis.hmset(`room:${roomId}`, roomData);
   await redis.expire(`room:${roomId}`, ROOM_TTL);
@@ -283,6 +295,7 @@ async function createRoom({ hostId, hostName, hostAvatar, streamUrl, title, movi
     success: true,
     roomId,
     expiresAt: now + ROOM_TTL * 1000,
+    hasPassword: Boolean(roomData.password_hash),
   };
 }
 
@@ -319,6 +332,8 @@ async function getRoom(roomId) {
     member_count: memberCount || 0,
     has_played: normalized?.hasPlayed || hasRoomPlayed(data),
     expires_at: (parseInt(data.created_at) || 0) + ROOM_TTL * 1000,
+    has_password: Boolean(data.password_hash),
+    pin: data.pin || '',
   };
 }
 
@@ -579,6 +594,7 @@ async function listActiveRooms() {
         max_users: parseInt(data.max_users) || MAX_USERS,
         created_at: parseInt(data.created_at) || 0,
         ttl_seconds: ttl,
+        has_password: Boolean(data.password_hash),
       });
     }
 
@@ -634,6 +650,99 @@ async function checkDuplicateRoom(hostId, movieId, audio, season = '') {
   }
 }
 
+async function verifyRoomPassword(roomId, password, identifier = 'anonymous') {
+  try {
+    const data = await redis.hgetall(`room:${roomId}`);
+    if (!data || Object.keys(data).length === 0) {
+      return { success: false, error: 'Room not found.' };
+    }
+    // If no password set on room, it's public
+    if (!data.password_hash) {
+      return { success: true, isProtected: false };
+    }
+
+    const cleanId = String(identifier || 'anonymous').replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 80);
+    const attemptKey = `room_attempts:${roomId}:${cleanId}`;
+    const attemptData = await redis.hgetall(attemptKey);
+    let attempts = parseInt(attemptData?.attempts) || 0;
+    const lockUntil = parseInt(attemptData?.lock_until) || 0;
+    const now = Date.now();
+
+    // Check if currently locked
+    if (lockUntil > now) {
+      const remSec = Math.ceil((lockUntil - now) / 1000);
+      return {
+        success: false,
+        locked: true,
+        remaining_seconds: remSec,
+        attempts_left: 0,
+        error: `Nhập sai quá nhiều lần. Vui lòng thử lại sau ${remSec} giây.`,
+      };
+    }
+
+    if (!password || typeof password !== 'string') {
+      return {
+        success: false,
+        error: 'Vui lòng nhập mã PIN.',
+        locked: false,
+        attempts_left: Math.max(0, 5 - attempts),
+      };
+    }
+
+    const cleanPin = password.trim();
+    const match = await bcrypt.compare(cleanPin, data.password_hash);
+    if (!match) {
+      attempts += 1;
+      let newLockUntil = 0;
+      let remSec = 0;
+
+      if (attempts >= 10) {
+        newLockUntil = now + 240 * 1000; // 4 minutes lockout
+        remSec = 240;
+      } else if (attempts >= 5) {
+        newLockUntil = now + 120 * 1000; // 2 minutes lockout
+        remSec = 120;
+      }
+
+      await redis.hmset(attemptKey, {
+        attempts: String(attempts),
+        lock_until: String(newLockUntil),
+      });
+      await redis.expire(attemptKey, 600); // 10 minutes TTL
+
+      if (newLockUntil > 0) {
+        return {
+          success: false,
+          locked: true,
+          remaining_seconds: remSec,
+          attempts_left: 0,
+          error: `Nhập sai ${attempts} lần. Vui lòng thử lại sau ${remSec} giây.`,
+        };
+      }
+
+      const attemptsLeft = 5 - attempts;
+      return {
+        success: false,
+        locked: false,
+        remaining_seconds: 0,
+        attempts_left: attemptsLeft,
+        error: `Mã PIN không chính xác (còn ${attemptsLeft} lần thử).`,
+      };
+    }
+
+    // Success: clear failed attempts
+    await redis.del(attemptKey);
+    return { success: true, isProtected: true };
+  } catch (error) {
+    console.error('verifyRoomPassword error:', error);
+    return { success: false, error: 'Verification failed.' };
+  }
+}
+
+async function getRoomPasswordHash(roomId) {
+  return await redis.hget(`room:${roomId}`, 'password_hash');
+}
+
 module.exports = {
   createRoom,
   getRoom,
@@ -654,6 +763,8 @@ module.exports = {
   listActiveRooms,
   countActiveRooms,
   checkDuplicateRoom,
+  verifyRoomPassword,
+  getRoomPasswordHash,
   isValidStreamUrl,
   ROOM_TTL,
   MAX_USERS,

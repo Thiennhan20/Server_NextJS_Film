@@ -42,9 +42,18 @@ app.use(cookieParser());
 // CORS configuration
 const { corsOptions } = require('./config/cors');
 app.use(cors(corsOptions));
-// Increase body size limit for avatar uploads (base64 images up to 20MB)
-app.use(express.json({ limit: '25mb' }));
-app.use(express.urlencoded({ limit: '25mb', extended: true }));
+// Body parsers: Strict 2MB limit globally to protect against memory exhaustion / DoS attacks.
+// Allow 25MB only on /api/auth/profile for base64 avatar uploads.
+app.use((req, res, next) => {
+  const isAvatarRoute = req.originalUrl?.startsWith('/api/auth/profile') || req.path?.startsWith('/api/auth/profile');
+  const limit = isAvatarRoute ? '25mb' : '2mb';
+  express.json({ limit })(req, res, next);
+});
+app.use((req, res, next) => {
+  const isAvatarRoute = req.originalUrl?.startsWith('/api/auth/profile') || req.path?.startsWith('/api/auth/profile');
+  const limit = isAvatarRoute ? '25mb' : '2mb';
+  express.urlencoded({ limit, extended: true })(req, res, next);
+});
 
 // MongoDB connection
 mongoose.connect(process.env.MONGODB_URI, {

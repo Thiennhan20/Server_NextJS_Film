@@ -38,6 +38,7 @@ router.get('/public', async (req, res) => {
       season: r.season || null,
       current_episode: r.current_episode || null,
       movie_id: r.movie_id || '',
+      has_password: Boolean(r.has_password),
     }));
     res.json({
       rooms: publicRooms,
@@ -262,7 +263,7 @@ router.delete('/history/:historyId', auth, async (req, res) => {
 
 router.post('/', auth, async (req, res) => {
   try {
-    const { title, stream_url, movie_id, audio, content_type, season, episode, episode_playlist, poster } = req.body;
+    const { title, stream_url, movie_id, audio, content_type, season, episode, episode_playlist, poster, password } = req.body;
     const userId = req.user; // From auth middleware
 
     // Validate stream URL if provided
@@ -291,11 +292,13 @@ router.post('/', auth, async (req, res) => {
       episode: episode || '',
       episodePlaylist: episode_playlist || [],
       poster: poster || '',
+      password: password ? String(password).trim() : null,
     });
 
     if (!result.success) {
       const status = result.code === 'CAPACITY_FULL' ? 503
         : result.code === 'DUPLICATE_ROOM' ? 409
+        : (result.error && result.error.includes('PIN')) ? 400
         : 500;
       return res.status(status).json({
         error: result.error,
@@ -328,6 +331,7 @@ router.post('/', auth, async (req, res) => {
       room_id: result.roomId,
       room_link: `/streaming-room?room=${result.roomId}`,
       expires_at: result.expiresAt,
+      has_password: Boolean(result.hasPassword),
     });
   } catch (error) {
     console.error('Create room error:', error);
@@ -367,12 +371,17 @@ router.get('/:id', auth, async (req, res) => {
       current_episode: room.current_episode,
       episode_playlist: room.episode_playlist || [],
       movie_id: room.movie_id || '',
+      has_password: Boolean(room.has_password),
     };
 
-    // Only host can see stream_url via REST
-    if (room.host_id === userId) {
+    // Only host can see stream_url and room PIN via REST
+    const isHostUser = Boolean(room.host_id && userId && String(room.host_id) === String(userId));
+    if (isHostUser) {
       response.stream_url = room.stream_url;
       response.is_host = true;
+      if (room.has_password && room.pin) {
+        response.pin = room.pin;
+      }
     } else {
       response.is_host = false;
     }
@@ -381,6 +390,30 @@ router.get('/:id', auth, async (req, res) => {
   } catch (error) {
     console.error('Get room error:', error);
     res.status(500).json({ error: 'Failed to get room info.' });
+  }
+});
+
+// ─── POST /api/rooms/:id/verify-password ─────────────────────
+router.post('/:id/verify-password', auth, async (req, res) => {
+  try {
+    const roomId = req.params.id.toUpperCase();
+    const { password } = req.body;
+    const identifier = req.user || req.ip || req.headers['x-forwarded-for'] || 'client';
+    const result = await roomService.verifyRoomPassword(roomId, password, identifier);
+    if (!result.success) {
+      const status = result.locked ? 429 : 403;
+      return res.status(status).json({
+        success: false,
+        error: result.error || 'Mã PIN phòng không chính xác.',
+        locked: Boolean(result.locked),
+        remaining_seconds: result.remaining_seconds || 0,
+        attempts_left: result.attempts_left !== undefined ? result.attempts_left : 0,
+      });
+    }
+    res.json({ success: true, is_protected: result.isProtected });
+  } catch (error) {
+    console.error('Verify room password error:', error);
+    res.status(500).json({ success: false, error: 'Failed to verify password.' });
   }
 });
 
@@ -412,7 +445,8 @@ router.delete('/:id', auth, async (req, res) => {
     // Notify WebSocket clients (if io instance is available)
     const io = req.app.get('io');
     if (io) {
-      io.to(`room:${roomId}`).emit('ROOM_CLOSED', {
+      const watchPartyNamespace = io.of ? io.of('/watch-party') : io;
+      watchPartyNamespace.to(`room:${roomId}`).emit('ROOM_CLOSED', {
         message: 'Host ended the session. Redirecting in 5 seconds...'
       });
     }

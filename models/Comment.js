@@ -48,6 +48,10 @@ const commentSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Comment'
   }],
+  replyCount: {
+    type: Number,
+    default: 0
+  },
   isDeleted: {
     type: Boolean,
     default: false
@@ -61,6 +65,9 @@ commentSchema.index({ movieId: 1, type: 1, createdAt: -1 });
 commentSchema.index({ parentId: 1 });
 commentSchema.index({ userId: 1 });
 commentSchema.index({ likedBy: 1 });
+commentSchema.index({ parentId: 1, isDeleted: 1, likes: -1, createdAt: -1 });
+commentSchema.index({ parentId: 1, isDeleted: 1, replyCount: -1, createdAt: -1 });
+commentSchema.index({ movieId: 1, type: 1, parentId: 1, isDeleted: 1, createdAt: -1 });
 
 // Virtual for checking if user liked the comment
 commentSchema.virtual('isLiked').get(function() {

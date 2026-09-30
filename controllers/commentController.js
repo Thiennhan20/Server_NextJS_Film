@@ -10,20 +10,27 @@ const CACHE_KEY_RECENT_COMMENTS = 'homepage:comments:recent';
 const CACHE_TTL_TOP = 600;    // 10 minutes (pre-warmed by QStash every 5m)
 const CACHE_TTL_RECENT = 180; // 3 minutes (pre-warmed by QStash every 1m)
 
-// Helper: Invalidate homepage comment caches
+const KNOWN_LIMITS = [4, 5, 8, 9, 10, 12, 15, 20, 50];
+const KNOWN_SORTS = ['likes', 'replies'];
+
+// Helper: Invalidate homepage comment caches without blocking Redis KEYS scan
 const invalidateCommentCaches = async (which = 'all') => {
     try {
+        const keysToDelete = [];
         if (which === 'all' || which === 'recent') {
-            const recentKeys = await redis.keys(`${CACHE_KEY_RECENT_COMMENTS}:*`);
-            if (recentKeys.length > 0) {
-                await Promise.all(recentKeys.map(k => redis.del(k)));
+            for (const lim of KNOWN_LIMITS) {
+                keysToDelete.push(`${CACHE_KEY_RECENT_COMMENTS}:${lim}`);
             }
         }
         if (which === 'all' || which === 'top') {
-            const topKeys = await redis.keys(`${CACHE_KEY_TOP_COMMENTS}:*`);
-            if (topKeys.length > 0) {
-                await Promise.all(topKeys.map(k => redis.del(k)));
+            for (const sort of KNOWN_SORTS) {
+                for (const lim of KNOWN_LIMITS) {
+                    keysToDelete.push(`${CACHE_KEY_TOP_COMMENTS}:${sort}:${lim}`);
+                }
             }
+        }
+        if (keysToDelete.length > 0) {
+            await redis.del(...keysToDelete);
         }
     } catch (err) {
         console.warn('Invalidate comment cache failed:', err.message);
@@ -110,7 +117,8 @@ const collectReplyBranchIds = async (rootId) => {
 };
 
 // GET /api/comments/top - Lấy top comments (most liked or most replied) for homepage
-// Redis cached: 5 minutes TTL, auto-invalidated on create/like/delete
+// GET /api/comments/top - Lấy top comments (most liked or most replied) for homepage
+// Redis cached: 10 minutes TTL, auto-invalidated on create/like/delete
 const getTopComments = async (req, res) => {
     try {
         const { limit = 10, sortBy = 'likes' } = req.query;
@@ -124,26 +132,32 @@ const getTopComments = async (req, res) => {
             return res.json({ success: true, data: parsed, _cached: true });
         }
 
-        // 2. Cache miss → query MongoDB
+        // 2. Cache miss → query MongoDB with compound indexes
+        const isRepliesSort = sortBy === 'replies';
+        const sortStage = isRepliesSort
+            ? { replyCount: -1, createdAt: -1 }
+            : { likes: -1, createdAt: -1 };
+
         const pipeline = [
-            { $match: { parentId: null, isDeleted: false } },
-            {
-                $addFields: {
-                    replyCount: { $size: { $ifNull: ['$replies', []] } }
-                }
-            },
             {
                 $match: {
+                    parentId: null,
+                    isDeleted: false,
                     $or: [
                         { likes: { $gte: 1 } },
-                        { replyCount: { $gte: 1 } }
+                        { replyCount: { $gte: 1 } },
+                        { 'replies.0': { $exists: true } } // Backward compatibility
                     ]
                 }
             },
+            { $sort: sortStage },
+            { $limit: limitNum },
             {
-                $sort: sortBy === 'replies'
-                    ? { replyCount: -1, createdAt: -1 }
-                    : { likes: -1, createdAt: -1 }
+                $addFields: {
+                    replyCount: {
+                        $ifNull: ['$replyCount', { $size: { $ifNull: ['$replies', []] } }]
+                    }
+                }
             },
             {
                 $lookup: {
@@ -154,7 +168,6 @@ const getTopComments = async (req, res) => {
                 }
             },
             { $unwind: '$user' },
-            { $limit: limitNum },
             {
                 $project: {
                     _id: 1,
@@ -173,7 +186,7 @@ const getTopComments = async (req, res) => {
 
         const comments = await Comment.aggregate(pipeline);
 
-        // 3. Store in Redis with 5 min TTL
+        // 3. Store in Redis with 10 min TTL
         await redis.set(cacheKey, comments, CACHE_TTL_TOP);
 
         res.json({
@@ -188,7 +201,7 @@ const getTopComments = async (req, res) => {
 };
 
 // GET /api/comments/recent - Lấy recent comments (newest across all movies) for homepage
-// Redis cached: 1 minute TTL, auto-invalidated on create/delete
+// Redis cached: 3 minutes TTL, auto-invalidated on create/delete
 const getRecentComments = async (req, res) => {
     try {
         const { limit = 10 } = req.query;
@@ -202,10 +215,11 @@ const getRecentComments = async (req, res) => {
             return res.json({ success: true, data: parsed, _cached: true });
         }
 
-        // 2. Cache miss → query MongoDB
+        // 2. Cache miss → query MongoDB with early limit before user lookup
         const pipeline = [
             { $match: { parentId: null, isDeleted: false } },
             { $sort: { createdAt: -1 } },
+            { $limit: limitNum },
             {
                 $lookup: {
                     from: 'users',
@@ -215,7 +229,6 @@ const getRecentComments = async (req, res) => {
                 }
             },
             { $unwind: '$user' },
-            { $limit: limitNum },
             {
                 $project: {
                     _id: 1,
@@ -232,7 +245,7 @@ const getRecentComments = async (req, res) => {
 
         const comments = await Comment.aggregate(pipeline);
 
-        // 3. Store in Redis with 1 min TTL
+        // 3. Store in Redis with 3 min TTL
         await redis.set(cacheKey, comments, CACHE_TTL_RECENT);
 
         res.json({
@@ -506,10 +519,11 @@ const createComment = async (req, res) => {
 
         await comment.save();
 
-        // If it's a reply, add to parent's replies array
+        // If it's a reply, add to parent's replies array and increment replyCount
         if (threadParentId) {
             await Comment.findByIdAndUpdate(threadParentId, {
-                $push: { replies: comment._id }
+                $push: { replies: comment._id },
+                $inc: { replyCount: 1 }
             });
         }
 
@@ -683,9 +697,15 @@ const deleteComment = async (req, res) => {
             ];
         } else {
             deletedCommentIds = await collectReplyBranchIds(comment._id);
+            const repliesToDeleteCount = deletedCommentIds.length;
             await Comment.findByIdAndUpdate(comment.parentId, {
-                $pull: { replies: { $in: deletedCommentIds } }
+                $pull: { replies: { $in: deletedCommentIds } },
+                $inc: { replyCount: -repliesToDeleteCount }
             });
+            await Comment.updateOne(
+                { _id: comment.parentId, replyCount: { $lt: 0 } },
+                { $set: { replyCount: 0 } }
+            );
         }
 
         await Comment.deleteMany({ _id: { $in: deletedCommentIds } });

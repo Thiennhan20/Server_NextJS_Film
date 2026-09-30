@@ -137,7 +137,7 @@ function initializeWebSocket(server) {
 
     // ─── JOIN_ROOM ──────────────────────────────────────────
 
-    socket.on('JOIN_ROOM', async ({ room_id }) => {
+    socket.on('JOIN_ROOM', async ({ room_id, password }) => {
       if (!room_id) {
         socket.emit('ERROR', { message: 'Room ID is required.' });
         return;
@@ -152,6 +152,30 @@ function initializeWebSocket(server) {
           message: 'Room not found or has expired.'
         });
         return;
+      }
+
+      // Check password if room is protected and joining user is not host
+      const isHostUser = Boolean(room.host_id && socket.userId && String(room.host_id) === String(socket.userId));
+      if (room.has_password && !isHostUser) {
+        const identifier = socket.userId || socket.handshake?.address || socket.id;
+        if (!password) {
+          socket.emit('PASSWORD_REQUIRED', {
+            code: 'PASSWORD_REQUIRED',
+            message: 'Phòng này yêu cầu mã PIN 6 số để tham gia.',
+          });
+          return;
+        }
+        const verifyRes = await roomService.verifyRoomPassword(roomId, password, identifier);
+        if (!verifyRes.success) {
+          socket.emit('INVALID_PASSWORD', {
+            code: verifyRes.locked ? 'PASSWORD_LOCKED' : 'INVALID_PASSWORD',
+            message: verifyRes.error || 'Mã PIN phòng không chính xác.',
+            locked: Boolean(verifyRes.locked),
+            remaining_seconds: verifyRes.remaining_seconds || 0,
+            attempts_left: verifyRes.attempts_left !== undefined ? verifyRes.attempts_left : 0,
+          });
+          return;
+        }
       }
 
       // Check if reconnecting from grace period
@@ -227,6 +251,8 @@ function initializeWebSocket(server) {
         title: room.title,
         host_name: room.host_name,
         is_host: isUserHost,
+        has_password: Boolean(room.has_password),
+        pin: isUserHost ? (room.pin || '') : undefined,
         members: membersList,
         audio: room.audio || '',
         content_type: room.content_type || '',

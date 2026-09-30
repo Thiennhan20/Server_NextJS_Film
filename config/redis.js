@@ -27,10 +27,22 @@ const redisClient = {
   // Get value
   async get(key) {
     try {
+      let raw;
       if (ioRedisClient) {
-        return await ioRedisClient.get(key);
+        raw = await ioRedisClient.get(key);
+      } else {
+        raw = await upstashRedis.get(key);
       }
-      return await upstashRedis.get(key);
+      if (raw === null || raw === undefined) return null;
+      // Auto-parse if value is returned as JSON string
+      if (typeof raw === 'string') {
+        try {
+          return JSON.parse(raw);
+        } catch {
+          return raw;
+        }
+      }
+      return raw;
     } catch (error) {
       console.error('Redis GET error:', error);
       return null;
@@ -40,32 +52,36 @@ const redisClient = {
   // Set value with optional expiration (seconds)
   async set(key, value, expirationSeconds = null) {
     try {
-      const stringValue = typeof value === 'string' ? value : JSON.stringify(value);
-      
       if (ioRedisClient) {
+        const stringValue = typeof value === 'string' ? value : JSON.stringify(value);
         if (expirationSeconds) {
           return await ioRedisClient.setex(key, expirationSeconds, stringValue);
         }
         return await ioRedisClient.set(key, stringValue);
       }
       
+      // Upstash Redis automatically handles JSON serialization
       if (expirationSeconds) {
-        return await upstashRedis.setex(key, expirationSeconds, stringValue);
+        return await upstashRedis.set(key, value, { ex: expirationSeconds });
       }
-      return await upstashRedis.set(key, stringValue);
+      return await upstashRedis.set(key, value);
     } catch (error) {
       console.error('Redis SET error:', error);
       return null;
     }
   },
 
-  // Delete key
-  async del(key) {
+  // Delete key(s)
+  async del(...keys) {
     try {
+      if (keys.length === 0) return 0;
+      const flatKeys = keys.flat();
+      if (flatKeys.length === 0) return 0;
+
       if (ioRedisClient) {
-        return await ioRedisClient.del(key);
+        return await ioRedisClient.del(...flatKeys);
       }
-      return await upstashRedis.del(key);
+      return await upstashRedis.del(...flatKeys);
     } catch (error) {
       console.error('Redis DEL error:', error);
       return null;
