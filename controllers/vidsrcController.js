@@ -272,7 +272,12 @@ const embedProxy = async (req, res) => {
         html = html.replace(/VS_DEVTOOLS/g, 'NO_DEVTOOLS');
         html = html.replace(/VS_EXPIRED/g, 'NO_EXPIRED');
 
-        // 4. Sandbox all iframes inside the embed HTML to prevent child iframes from navigating top or opening popups
+        // 4. Neutralize Cloudflare Turnstile inside player frame to bypass datacenter IP verification gate
+        html = html.replace(/"turnstile"\s*:\s*true/gi, '"turnstile":false');
+        html = html.replace(/<script[^>]*challenges\.cloudflare\.com\/turnstile[^>]*><\/script>/gi, '');
+        html = html.replace(/<div\s+id="tsGate"[^>]*>[\s\S]*?<\/div>\s*<\/div>/gi, '');
+
+        // 5. Sandbox all iframes inside the embed HTML to prevent child iframes from navigating top or opening popups
         html = html.replace(/<iframe\b(?![^>]*\bsandbox=)/gi, '<iframe sandbox="allow-scripts allow-same-origin allow-forms allow-presentation allow-popups"');
 
         const embedOrigin = parsed.origin;
@@ -285,8 +290,32 @@ const embedProxy = async (req, res) => {
 
         const monitorScript = `
         <base href="${embedOrigin}/">
+        <style>
+          #tsGate, .jw-gate { display: none !important; opacity: 0 !important; pointer-events: none !important; }
+        </style>
         <script>
         (function() {
+          // Mock Cloudflare Turnstile to prevent script crashes and satisfy potential callback hooks
+          window.turnstile = {
+            render: function(selector, opts) {
+              if (opts && typeof opts.callback === 'function') {
+                setTimeout(function() { try { opts.callback('turnstile_bypass'); } catch(e) {} }, 10);
+              }
+              return 'ts_bypass_widget';
+            },
+            reset: function() {},
+            remove: function() {},
+            getResponse: function() { return 'turnstile_bypass'; }
+          };
+
+          // Auto-dispatch verification events so player boots immediately
+          setTimeout(function() {
+            try {
+              window.dispatchEvent(new Event('vs:verified'));
+              window.dispatchEvent(new Event('vs:playerready'));
+            } catch(e) {}
+          }, 30);
+
           const originUrl = "${embedOrigin}";
           const localServerOrigin = "${serverOrigin}";
           const dynamicHosts = ${dynamicHostsJson};
