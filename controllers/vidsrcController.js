@@ -106,8 +106,34 @@ const getActiveDomain = async (req, res) => {
     }
 };
 
-const VIDSRC_WHITELIST_PATTERN = /(?:localhost|127\.0\.0\.1|vidsrc2\.ru|vidsrcme\.su|vidsrc\.[a-z0-9-]+|cloudorchestranova\.com|vidsrcme\.ru|vidapi\.cloud|comityofcognomen\.site|epexegesisengine\.site|propinquitypostulate\.website|ataraxiaoftheapex\.space|zenithofzircon\.space|onomatopoeiaoverture\.website|vercel\.app|onrender\.com|\.(?:site|website|space|su|ru)|tmdb\.org|themoviedb\.org|opensubtitles\.org|opensubtitles\.com|subscene\.com|osdb\.link|subdl\.com|statically\.io|cloudfront\.net|fastly\.net|jwplayer\.com|jwpcdn\.com|cloudflare\.com|jsdelivr\.net|gstatic\.com)/i;
-const STREAM_TLD_REGEX = /\.(?:site|website|space|su|ru)$/i;
+const DYNAMIC_ALLOWED_HOSTS = new Set([
+    'stellarconductornexus.com',
+    'cloudorchestranova.com',
+    'vidapi.cloud',
+    'data.vidsrc.sh',
+    'vidsrc.sh',
+    'zealotsofzenith.site',
+    'comityofcognomen.site',
+    'epexegesisengine.site',
+    'propinquitypostulate.website',
+    'ataraxiaoftheapex.space',
+    'zenithofzircon.space',
+    'onomatopoeiaoverture.website'
+]);
+
+const registerAllowedHost = (urlStr) => {
+    if (!urlStr || typeof urlStr !== 'string') return;
+    try {
+        const u = new URL(urlStr);
+        const h = u.hostname.toLowerCase();
+        if (h && !DYNAMIC_ALLOWED_HOSTS.has(h)) {
+            DYNAMIC_ALLOWED_HOSTS.add(h);
+        }
+    } catch(e) {}
+};
+
+const VIDSRC_WHITELIST_PATTERN = /(?:localhost|127\.0\.0\.1|vidsrc2\.ru|vidsrcme\.su|vidsrc\.[a-z0-9-]+|cloudorchestranova\.com|stellarconductornexus\.com|vidsrcme\.ru|vidapi\.cloud|comityofcognomen\.site|epexegesisengine\.site|propinquitypostulate\.website|ataraxiaoftheapex\.space|zenithofzircon\.space|onomatopoeiaoverture\.website|zealotsofzenith\.site|vercel\.app|onrender\.com|\.(?:site|website|space|su|ru|sh)|tmdb\.org|themoviedb\.org|opensubtitles\.org|opensubtitles\.com|subscene\.com|osdb\.link|subdl\.com|statically\.io|cloudfront\.net|fastly\.net|jwplayer\.com|jwpcdn\.com|cloudflare\.com|challenges\.cloudflare\.com|jsdelivr\.net|gstatic\.com)/i;
+const STREAM_TLD_REGEX = /\.(?:site|website|space|su|ru|sh)$/i;
 
 // Helper to build axios headers
 const buildEmbedHeaders = (referer, origin) => ({
@@ -136,6 +162,7 @@ const embedProxy = async (req, res) => {
 
     try {
         let targetEmbedUrl = embedUrl;
+        registerAllowedHost(targetEmbedUrl);
         // Protect old cached URLs: automatically map dead/expired domains to verified live domain if available
         if (cachedLiveDomain && (targetEmbedUrl.includes('/embed/movie') || targetEmbedUrl.includes('/embed/tv'))) {
             targetEmbedUrl = targetEmbedUrl.replace(/https?:\/\/(?:vidsrcme\.su|vidsrc\.gd|vidsrc\.me|vidsrc\.bz|vidsrc-embed\.(?:su|ru))/i, cachedLiveDomain);
@@ -149,12 +176,15 @@ const embedProxy = async (req, res) => {
         }
 
         let parsed = new URL(targetEmbedUrl);
+        registerAllowedHost(parsed.origin);
 
         const customRef = req.query.ref;
+        if (customRef) registerAllowedHost(customRef);
+
         let refererHeader = customRef ? (customRef.endsWith('/') ? customRef : customRef + '/') : `${parsed.origin}/`;
-        if (targetEmbedUrl.includes('cloudorchestranova.com/embed/player')) {
-            refererHeader = 'https://cloudorchestranova.com/';
-        } else if (targetEmbedUrl.includes('cloudorchestranova.com')) {
+        if (targetEmbedUrl.includes('/embed/player')) {
+            refererHeader = customRef ? (customRef.endsWith('/') ? customRef : customRef + '/') : `${parsed.origin}/`;
+        } else if (targetEmbedUrl.includes('cloudorchestranova.com') || targetEmbedUrl.includes('stellarconductornexus.com')) {
             if (customRef && !customRef.includes('vidsrcme.su') && !customRef.includes('vidsrc.gd')) {
                 refererHeader = customRef.endsWith('/') ? customRef : customRef + '/';
             } else {
@@ -243,7 +273,7 @@ const embedProxy = async (req, res) => {
         html = html.replace(/VS_EXPIRED/g, 'NO_EXPIRED');
 
         // 4. Sandbox all iframes inside the embed HTML to prevent child iframes from navigating top or opening popups
-        html = html.replace(/<iframe\b(?![^>]*\bsandbox=)/gi, '<iframe sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"');
+        html = html.replace(/<iframe\b(?![^>]*\bsandbox=)/gi, '<iframe sandbox="allow-scripts allow-same-origin allow-forms allow-presentation allow-popups"');
 
         const embedOrigin = parsed.origin;
         const rawProto = (req.headers['x-forwarded-proto'] || req.protocol || 'http').toString();
@@ -251,14 +281,17 @@ const embedProxy = async (req, res) => {
         const protocol = (rawProto.includes('https') || host.includes('onrender.com')) ? 'https' : 'http';
         const serverOrigin = `${protocol}://${host}`;
 
+        const dynamicHostsJson = JSON.stringify(Array.from(DYNAMIC_ALLOWED_HOSTS));
+
         const monitorScript = `
         <base href="${embedOrigin}/">
         <script>
         (function() {
           const originUrl = "${embedOrigin}";
           const localServerOrigin = "${serverOrigin}";
-          const VIDSRC_WHITELIST_PATTERN = /(?:localhost|127\\.0\\.0\\.1|vidsrcme\\.su|vidsrc\\.[a-z0-9-]+|cloudorchestranova\\.com|vidsrcme\\.ru|vidapi\\.cloud|comityofcognomen\\.site|epexegesisengine\\.site|propinquitypostulate\\.website|ataraxiaoftheapex\\.space|zenithofzircon\\.space|onomatopoeiaoverture\\.website|vercel\\.app|onrender\\.com|\\.(?:site|website|space|su|ru)|tmdb\\.org|themoviedb\\.org|opensubtitles\\.org|opensubtitles\\.com|subscene\\.com|osdb\\.link|subdl\\.com|statically\\.io|cloudfront\\.net|fastly\\.net|jwplayer\\.com|jwpcdn\\.com|cloudflare\\.com|jsdelivr\\.net|gstatic\\.com)/i;
-          const STREAM_TLD_REGEX = /\\.(?:site|website|space|su|ru)$/i;
+          const dynamicHosts = ${dynamicHostsJson};
+          const VIDSRC_WHITELIST_PATTERN = /(?:localhost|127\\.0\\.0\\.1|vidsrcme\\.su|vidsrc\\.[a-z0-9-]+|cloudorchestranova\\.com|stellarconductornexus\\.com|vidsrcme\\.ru|vidapi\\.cloud|comityofcognomen\\.site|epexegesisengine\\.site|propinquitypostulate\\.website|ataraxiaoftheapex\\.space|zenithofzircon\\.space|onomatopoeiaoverture\\.website|zealotsofzenith\\.site|vercel\\.app|onrender\\.com|\\.(?:site|website|space|su|ru|sh)|tmdb\\.org|themoviedb\\.org|opensubtitles\\.org|opensubtitles\\.com|subscene\\.com|osdb\\.link|subdl\\.com|statically\\.io|cloudfront\\.net|fastly\\.net|jwplayer\\.com|jwpcdn\\.com|cloudflare\\.com|challenges\\.cloudflare\\.com|jsdelivr\\.net|gstatic\\.com)/i;
+          const STREAM_TLD_REGEX = /\\.(?:site|website|space|su|ru|sh)$/i;
           const AD_URL_REGEX = /(?:sbx\\.js|\\/embed\\/[a-f0-9]{16,}\\.js|aclib|adcash|popcash|popads|histats|waust|disable-devtool|devtool-guard|adexchangerapid|canoesaisles|groszynudgepreter|glumsynemasmitham|beacon\\.min\\.js|syndication|doubleclick|adnxs|trafficjunky|exoclick|juicyads|clickadu|propellerads|betting|casino)/i;
 
           // Block location.replace & location.assign ad traps
@@ -298,7 +331,7 @@ const embedProxy = async (req, res) => {
             try {
               const u = new URL(urlStr, window.location.href);
               const h = u.hostname.toLowerCase();
-              if (STREAM_TLD_REGEX.test(h)) {
+              if (dynamicHosts.includes(h) || STREAM_TLD_REGEX.test(h)) {
                 return true;
               }
               return VIDSRC_WHITELIST_PATTERN.test(u.hostname);
@@ -445,7 +478,7 @@ const embedProxy = async (req, res) => {
                 };
               } else if (tag === 'iframe') {
                 try {
-                  el.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-presentation');
+                  el.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-presentation allow-popups');
                 } catch(e) {}
               }
               return el;
@@ -814,7 +847,14 @@ const proxyStream = async (req, res) => {
                                  lowerUrl.includes('rt_ping.php') || 
                                  (STREAM_TLD_REGEX.test(lowerHost) && (lowerUrl.includes('/pl/') || lowerUrl.includes('.m3u8') || lowerUrl.includes('.ts') || lowerUrl.includes('.key')));
 
-        if (!isStreamResource && !VIDSRC_WHITELIST_PATTERN.test(parsed.hostname)) {
+        registerAllowedHost(targetUrl);
+        if (customRef) registerAllowedHost(customRef);
+
+        const isAllowedHost = DYNAMIC_ALLOWED_HOSTS.has(parsed.hostname.toLowerCase()) || 
+                              STREAM_TLD_REGEX.test(lowerHost) || 
+                              VIDSRC_WHITELIST_PATTERN.test(parsed.hostname);
+
+        if (!isStreamResource && !isAllowedHost) {
             res.setHeader('Content-Type', 'application/javascript');
             res.setHeader('Access-Control-Allow-Origin', '*');
             res.setHeader('Cache-Control', 'no-store');
@@ -822,11 +862,11 @@ const proxyStream = async (req, res) => {
         }
 
         let refUrl = customRef ? (customRef.endsWith('/') ? customRef : customRef + '/') : `${parsed.origin}/`;
-        let originUrlStr = customRef || parsed.origin;
+        let originUrlStr = customRef ? (customRef.replace(/\/$/, '')) : parsed.origin;
 
-        if (targetUrl.includes('cloudorchestranova.com') || targetUrl.includes('vidsrcme.ru') || targetUrl.includes('vidapi.cloud') || isStreamResource) {
-            refUrl = 'https://cloudorchestranova.com/';
-            originUrlStr = 'https://cloudorchestranova.com';
+        if (targetUrl.includes('cloudorchestranova.com') || targetUrl.includes('stellarconductornexus.com') || targetUrl.includes('vidsrcme.ru') || targetUrl.includes('vidapi.cloud') || isStreamResource) {
+            refUrl = customRef ? (customRef.endsWith('/') ? customRef : customRef + '/') : 'https://cloudorchestranova.com/';
+            originUrlStr = customRef ? (customRef.replace(/\/$/, '')) : 'https://cloudorchestranova.com';
         }
 
         const passHeaders = {
