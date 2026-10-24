@@ -12,7 +12,7 @@ const defaultOrigins = [
   'https://moviesaw.vercel.app',
   'https://enterntn.duckdns.org',
   'https://www.enterntn.duckdns.org',
-  'https://ntngame.fly.dev'
+  'https://p01--game-app--znbny2j8c2gp.code.run'
 ];
 
 // Append process.env.CLIENT_URL if provided
