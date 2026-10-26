@@ -108,7 +108,7 @@ function pickClosestToNotification(comments, notification) {
 
 async function serializeNotification(notificationId) {
   return Notification.findById(notificationId)
-    .populate('actor', 'name avatar')
+    .populate('actor', 'name username avatar')
     .lean();
 }
 

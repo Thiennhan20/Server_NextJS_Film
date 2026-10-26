@@ -17,47 +17,44 @@ const auth = async (req, res, next) => {
       token = authHeader.substring(7); // Bỏ 'Bearer ' prefix
     }
 
-    // Check if token exists in blacklist
-    const isBlacklisted = await BlacklistedToken.findOne({ token });
+    // 1. Verify token first (synchronous CPU check - avoids DB round trips if expired or malformed)
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    // 2. Parallelize all database validation checks concurrently in a single round-trip
+    const Session = require('../models/Session');
+    const User = require('../models/User');
+
+    const [isBlacklisted, sessionExists, user] = await Promise.all([
+      BlacklistedToken.exists({ token }),
+      decoded.sessionId ? Session.exists({ _id: decoded.sessionId }) : Promise.resolve(true),
+      User.findById(decoded.userId).select('passwordChangedAt').lean()
+    ]);
+
     if (isBlacklisted) {
-      // Nếu token bị blacklist nhưng vẫn có refreshToken → cho client refresh
       if (req.cookies?.refreshToken) {
         return res.status(401).json({ message: 'Token has been invalidated', code: 'TOKEN_EXPIRED' });
       }
       return res.status(401).json({ message: 'Token has been invalidated' });
     }
 
-    // Verify token
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-
-    // Check if session is active
-    if (decoded.sessionId) {
-      const Session = require('../models/Session');
-      const sessionExists = await Session.exists({ _id: decoded.sessionId });
-      if (!sessionExists) {
-        return res.status(401).json({ message: 'Session has been revoked', code: 'SESSION_REVOKED' });
-      }
+    if (decoded.sessionId && !sessionExists) {
+      return res.status(401).json({ message: 'Session has been revoked', code: 'SESSION_REVOKED' });
     }
 
-    const User = require('../models/User');
-    const user = await User.findById(decoded.userId);
-    
-    // Kiểm tra user tồn tại
     if (!user) {
       return res.status(401).json({ message: 'User not found' });
     }
 
     // Invalidate tokens issued before password was changed
-    if (user.passwordChangedAt && decoded.iat && decoded.iat * 1000 < user.passwordChangedAt.getTime()) {
-      // Nếu có refreshToken → cho client refresh với token mới
+    if (user.passwordChangedAt && decoded.iat && decoded.iat * 1000 < new Date(user.passwordChangedAt).getTime()) {
       if (req.cookies?.refreshToken) {
         return res.status(401).json({ message: 'Token has been invalidated', code: 'TOKEN_EXPIRED' });
       }
       return res.status(401).json({ message: 'Token has been invalidated' });
     }
     
-    req.user = decoded.userId; // Chỉ gán userId để tương thích với code hiện tại
-    req.token = token; // Attach token to request (for logout later)
+    req.user = decoded.userId;
+    req.token = token;
     req.sessionId = decoded.sessionId;
     next();
   } catch (error) {

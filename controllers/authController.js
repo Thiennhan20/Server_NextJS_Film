@@ -10,6 +10,9 @@ const authService = require('../services/authService');
 const PasswordResetToken = require('../models/PasswordResetToken');
 const crypto = require('crypto');
 const bcrypt = require('bcrypt');
+const mongoose = require('mongoose');
+const { encodeId, decodeId } = require('../utils/hashids');
+const { generateUniqueUsername, validateUsername } = require('../utils/usernameHelper');
 
 // Middleware to validate request
 const validateRequest = (req, res, next) => {
@@ -372,8 +375,10 @@ const register = async (req, res) => {
 
         // No email user found - REGISTER (create new)
         const emailVerificationToken = authService.generateVerificationToken();
+        const username = await generateUniqueUsername(name, email, User);
         user = new User({
             name,
+            username,
             email,
             password,
             authType: 'email',
@@ -528,6 +533,9 @@ const googleLogin = async (req, res) => {
                     user.avatar = user.originalAvatar; // Dùng bản tối ưu R2
                 }
             }
+            if (!user.username) {
+                user.username = await generateUniqueUsername(user.name || name || email, email, User);
+            }
             await user.save();
 
             return createSessionAndSendResponse(user, res, 200, req);
@@ -536,11 +544,13 @@ const googleLogin = async (req, res) => {
         // Google user doesn't exist - REGISTER (create new)
         // Download and optimize avatar first to R2
         const optimizedAvatar = avatar ? await authService.downloadAndOptimizeAvatar(avatar, sub) : '';
+        const generatedUsername = await generateUniqueUsername(name || email, email, User);
 
         user = await User.findOneAndUpdate(
             { email, authType: 'google' },
             {
                 name: name || email,
+                username: generatedUsername,
                 email,
                 authType: 'google',
                 providerId: sub,
@@ -786,7 +796,26 @@ const getProfile = async (req, res) => {
 // Get public profile
 const getPublicProfile = async (req, res) => {
     try {
-        const user = await User.findById(req.params.id).select('name avatar originalAvatar createdAt friends');
+        const identifier = (req.params.id || '').trim();
+        if (!identifier) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        // Single batched $or query to check username, Hashid, or ObjectId in ONE database round-trip
+        const lower = identifier.toLowerCase();
+        const orConditions = [{ username: lower }];
+        const decodedId = decodeId(identifier);
+        if (decodedId) {
+            orConditions.push({ _id: decodedId });
+        }
+        if (mongoose.Types.ObjectId.isValid(identifier)) {
+            orConditions.push({ _id: identifier });
+        }
+
+        const user = await User.findOne({ $or: orConditions })
+            .select('name username avatar originalAvatar createdAt friends friendRequests sentFriendRequests')
+            .lean();
+
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
         }
@@ -795,6 +824,15 @@ const getPublicProfile = async (req, res) => {
         const isOwner = viewerId && user._id.toString() === viewerId;
         const isFriend = viewerId && user.friends?.some(friendId => friendId.toString() === viewerId);
         const canViewRecentlyWatched = isOwner || isFriend;
+
+        let friendStatus = 'none';
+        if (isFriend) {
+            friendStatus = 'friends';
+        } else if (viewerId && user.friendRequests?.some(id => id.toString() === viewerId)) {
+            friendStatus = 'request_sent';
+        } else if (viewerId && user.sentFriendRequests?.some(id => id.toString() === viewerId)) {
+            friendStatus = 'request_received';
+        }
 
         const recentlyWatched = canViewRecentlyWatched
             ? await WatchProgress.aggregate([
@@ -816,11 +854,14 @@ const getPublicProfile = async (req, res) => {
         res.json({
             user: {
                 _id: user._id,
+                hashId: encodeId(user._id),
+                username: user.username || '',
                 name: user.name,
                 avatar: user.avatar,
                 originalAvatar: user.originalAvatar,
                 createdAt: user.createdAt,
             },
+            friendStatus,
             recentlyWatched
         });
     } catch {
@@ -831,7 +872,7 @@ const getPublicProfile = async (req, res) => {
 // Update profile
 const updateProfile = async (req, res) => {
     try {
-        const { name, avatar } = req.body;
+        const { name, username, avatar } = req.body;
 
         const user = await User.findById(req.user);
         if (!user) {
@@ -840,12 +881,45 @@ const updateProfile = async (req, res) => {
 
         // Validate name length (max 20 characters including spaces)
         if (name !== undefined && name.length > 20) {
-            return res.status(400).json({ message: 'Username must not exceed 20 characters' });
+            return res.status(400).json({ message: 'Name must not exceed 20 characters' });
         }
 
-        // Check for profanity in username
+        // Check for profanity in name
         if (name !== undefined && containsProfanity(name)) {
-            return res.status(400).json({ message: 'Username contains inappropriate language. Please choose a different name.' });
+            return res.status(400).json({ message: 'Name contains inappropriate language. Please choose a different name.' });
+        }
+
+        // Validate and update username
+        if (username !== undefined && username !== null) {
+            const validation = validateUsername(username);
+            if (!validation.valid) {
+                return res.status(400).json({ message: validation.message });
+            }
+            if (containsProfanity(username)) {
+                return res.status(400).json({ message: 'Username contains inappropriate language.' });
+            }
+            const normalizedUsername = username.toLowerCase().trim();
+            if (normalizedUsername !== user.username) {
+                // Cooldown: 14 days between username changes (if previously changed)
+                if (user.usernameChangedAt) {
+                    const cooldownDays = 14;
+                    const cooldownMs = cooldownDays * 24 * 60 * 60 * 1000;
+                    const elapsed = Date.now() - new Date(user.usernameChangedAt).getTime();
+                    if (elapsed < cooldownMs) {
+                        const remainingDays = Math.ceil((cooldownMs - elapsed) / (24 * 60 * 60 * 1000));
+                        return res.status(400).json({ 
+                            message: `Bạn chỉ có thể đổi username 14 ngày một lần. Vui lòng thử lại sau ${remainingDays} ngày.` 
+                        });
+                    }
+                }
+
+                const existingUser = await User.findOne({ username: normalizedUsername });
+                if (existingUser && existingUser._id.toString() !== user._id.toString()) {
+                    return res.status(400).json({ message: 'Username này đã được sử dụng. Vui lòng chọn username khác.' });
+                }
+                user.username = normalizedUsername;
+                user.usernameChangedAt = new Date();
+            }
         }
 
         // Cập nhật thông tin
@@ -912,6 +986,9 @@ const updateProfile = async (req, res) => {
             user: authService.formatUserResponse(updatedUser)
         });
     } catch (error) {
+        if (error.code === 11000 || (error.name === 'MongoServerError' && error.code === 11000)) {
+            return res.status(400).json({ message: 'Username này đã được sử dụng. Vui lòng chọn username khác.' });
+        }
         res.status(500).json({ message: 'Server error', error: error.message });
     }
 };

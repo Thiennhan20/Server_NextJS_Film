@@ -8,6 +8,7 @@ brevoEmailApi.setApiKey(brevoSdk.TransactionalEmailsApiApiKeys.apiKey, process.e
 const { optimizeAvatar, optimizeAvatarToBuffer } = require('../utils/avatarOptimizer');
 const { uploadAvatar, isR2Configured } = require('./r2Service');
 const { RateLimiterMemory } = require('rate-limiter-flexible');
+const { encodeId } = require('../utils/hashids');
 
 // Rate limiter: 5 requests per 10 minutes per IP
 const rateLimiter = new RateLimiterMemory({
@@ -95,13 +96,19 @@ function parseUserAgent(uaString) {
 }
 
 function formatUserResponse(user) {
+    const rawId = user._id ? user._id.toString() : '';
+    const hashId = rawId ? encodeId(rawId) : '';
     return {
         id: user._id,
+        _id: user._id,
+        hashId,
+        username: user.username || '',
         name: user.name,
         email: user.email,
         avatar: user.avatar || '',
         originalAvatar: user.originalAvatar || '',
         authType: user.authType || 'email',
+        usernameChangedAt: user.usernameChangedAt || null,
         createdAt: user.createdAt,
         updatedAt: user.updatedAt,
     };

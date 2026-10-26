@@ -72,6 +72,7 @@ const buildPopulateUserShapeStages = () => ([
             userId: {
                 _id: '$userDoc._id',
                 name: '$userDoc.name',
+                username: '$userDoc.username',
                 avatar: '$userDoc.avatar'
             }
         }
@@ -529,8 +530,8 @@ const createComment = async (req, res) => {
 
         // Populate user info for response
         const populatedComment = await Comment.findById(comment._id)
-            .populate('userId', 'name avatar')
-            .populate('replyTo', 'name avatar')
+            .populate('userId', 'name username avatar')
+            .populate('replyTo', 'name username avatar')
             .lean();
 
         if (parentComment && !parentComment.userId.equals(userId)) {

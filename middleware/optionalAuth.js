@@ -12,11 +12,11 @@ const optionalAuth = async (req, res, next) => {
     }
     
     if (token) {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
       const BlacklistedToken = require('../models/BlacklistedToken');
-      const isBlacklisted = await BlacklistedToken.findOne({ token });
+      const isBlacklisted = await BlacklistedToken.exists({ token });
       
       if (!isBlacklisted) {
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
         req.user = decoded.userId; 
       }
     }

@@ -1,6 +1,20 @@
+const mongoose = require('mongoose');
 const User = require('../models/User');
 const Notification = require('../models/Notification');
 const notificationService = require('../services/notificationService');
+const { encodeId, decodeId } = require('../utils/hashids');
+
+const resolveUserId = async (paramId) => {
+    if (!paramId) return null;
+    const str = String(paramId).trim();
+    if (mongoose.Types.ObjectId.isValid(str)) {
+        return str;
+    }
+    const decoded = decodeId(str);
+    if (decoded) return decoded;
+    const user = await User.findOne({ username: str.toLowerCase() }).select('_id').lean();
+    return user ? user._id.toString() : null;
+};
 
 const createNotificationSafely = async (payload) => {
     try {
@@ -13,8 +27,12 @@ const createNotificationSafely = async (payload) => {
 // Send a friend request
 const sendRequest = async (req, res) => {
     try {
-        const { id } = req.params;
+        const id = await resolveUserId(req.params.id);
         const currentUserId = req.user;
+
+        if (!id) {
+            return res.status(404).json({ message: "User not found." });
+        }
 
         if (id === currentUserId.toString()) {
             return res.status(400).json({ message: "You cannot add yourself as a friend." });
@@ -65,8 +83,12 @@ const sendRequest = async (req, res) => {
 // Accept a friend request
 const acceptRequest = async (req, res) => {
     try {
-        const { id } = req.params;
+        const id = await resolveUserId(req.params.id);
         const currentUserId = req.user;
+
+        if (!id) {
+            return res.status(404).json({ message: "User not found." });
+        }
 
         const currentUser = await User.findById(currentUserId);
         const requestingUser = await User.findById(id);
@@ -112,8 +134,12 @@ const acceptRequest = async (req, res) => {
 // Reject a friend request
 const rejectRequest = async (req, res) => {
     try {
-        const { id } = req.params;
+        const id = await resolveUserId(req.params.id);
         const currentUserId = req.user;
+
+        if (!id) {
+            return res.status(404).json({ message: "User not found." });
+        }
 
         const currentUser = await User.findById(currentUserId);
         const requestingUser = await User.findById(id);
@@ -145,8 +171,12 @@ const rejectRequest = async (req, res) => {
 // Cancel a sent friend request
 const cancelRequest = async (req, res) => {
     try {
-        const { id } = req.params;
+        const id = await resolveUserId(req.params.id);
         const currentUserId = req.user;
+
+        if (!id) {
+            return res.status(404).json({ message: "User not found." });
+        }
 
         const currentUser = await User.findById(currentUserId);
         const targetUser = await User.findById(id);
@@ -178,8 +208,12 @@ const cancelRequest = async (req, res) => {
 // Remove a friend
 const removeFriend = async (req, res) => {
     try {
-        const { id } = req.params;
+        const id = await resolveUserId(req.params.id);
         const currentUserId = req.user;
+
+        if (!id) {
+            return res.status(404).json({ message: "User not found." });
+        }
 
         const currentUser = await User.findById(currentUserId);
         const targetUser = await User.findById(id);
@@ -212,18 +246,54 @@ const removeFriend = async (req, res) => {
 const getFriendsData = async (req, res) => {
     try {
         const currentUser = await User.findById(req.user)
-            .populate('friends', 'name avatar originalAvatar createdAt')
-            .populate('friendRequests', 'name avatar originalAvatar createdAt')
-            .populate('sentFriendRequests', 'name avatar originalAvatar createdAt');
+            .select('friends friendRequests sentFriendRequests')
+            .lean();
 
         if (!currentUser) {
             return res.status(404).json({ message: "User not found." });
         }
 
+        const friendIds = currentUser.friends || [];
+        const requestIds = currentUser.friendRequests || [];
+        const sentIds = currentUser.sentFriendRequests || [];
+
+        // Collect all distinct IDs across all three lists
+        const allIdsSet = new Set();
+        [...friendIds, ...requestIds, ...sentIds].forEach(id => {
+            if (id) allIdsSet.add(id.toString());
+        });
+
+        if (allIdsSet.size === 0) {
+            return res.json({
+                friends: [],
+                friendRequests: [],
+                sentFriendRequests: []
+            });
+        }
+
+        // Single batched DB query to load all required users at once
+        const users = await User.find({
+            _id: { $in: Array.from(allIdsSet) }
+        })
+        .select('name username avatar originalAvatar createdAt')
+        .lean();
+
+        const userMap = new Map();
+        users.forEach(u => {
+            userMap.set(u._id.toString(), {
+                ...u,
+                hashId: encodeId(u._id)
+            });
+        });
+
+        const mapUsers = (ids) => ids
+            .map(id => userMap.get(id ? id.toString() : ''))
+            .filter(Boolean);
+
         res.json({
-            friends: currentUser.friends,
-            friendRequests: currentUser.friendRequests,
-            sentFriendRequests: currentUser.sentFriendRequests
+            friends: mapUsers(friendIds),
+            friendRequests: mapUsers(requestIds),
+            sentFriendRequests: mapUsers(sentIds)
         });
     } catch (err) {
         console.error(err);

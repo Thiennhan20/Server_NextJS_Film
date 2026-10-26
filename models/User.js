@@ -7,6 +7,14 @@ const userSchema = new mongoose.Schema({
     required: true,
     trim: true
   },
+  username: {
+    type: String,
+    unique: true,
+    sparse: true,
+    trim: true,
+    lowercase: true,
+    index: true
+  },
   email: {
     type: String,
     required: true,
@@ -75,6 +83,10 @@ const userSchema = new mongoose.Schema({
     default: Date.now
   },
   passwordChangedAt: {
+    type: Date,
+    default: null
+  },
+  usernameChangedAt: {
     type: Date,
     default: null
   }

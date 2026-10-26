@@ -17,7 +17,7 @@ const getNotifications = async (req, res) => {
       Notification.countDocuments(query),
       Notification.countDocuments({ ...query, read: false }),
       Notification.find(query)
-        .populate('actor', 'name avatar')
+        .populate('actor', 'name username avatar')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
@@ -61,7 +61,7 @@ const markAsRead = async (req, res) => {
       { $set: { read: true, readAt: new Date() } },
       { new: true }
     )
-      .populate('actor', 'name avatar')
+      .populate('actor', 'name username avatar')
       .lean();
 
     if (!notification) {
