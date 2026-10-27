@@ -2,10 +2,11 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-// Cấu hình model: Ưu tiên gemini-2.5-flash (chạy trực tiếp trên Vertex AI qua Service Account, không giới hạn 20 req/day)
+// Cấu hình model: Toàn bộ model thuộc Nhóm 1 (hoạt động 100% trên Vertex AI qua Service Account, không giới hạn 20 req/day)
 const PRIMARY_MODEL = 'gemini-2.5-flash';
-const FALLBACK_MODEL = 'gemini-3.7-flash';
-const CANDIDATE_MODELS = [PRIMARY_MODEL, FALLBACK_MODEL];
+const SECONDARY_MODEL = 'gemini-2.5-pro';
+const FALLBACK_MODEL = 'gemini-2.5-flash-lite';
+const CANDIDATE_MODELS = [PRIMARY_MODEL, SECONDARY_MODEL, FALLBACK_MODEL];
 
 const DEFAULT_LOCATION = process.env.VERTEX_LOCATION || 'us-central1';
 
@@ -237,7 +238,7 @@ async function callGenerativeLanguageApi(modelName, formattedContents, systemPro
 }
 
 /**
- * Gửi yêu cầu trò chuyện AI (Ưu tiên gemini-3.7-flash, tự động fallback an toàn)
+ * Gửi yêu cầu trò chuyện AI (Ưu tiên gemini-2.5-flash, tự động fallback sang gemini-2.5-pro và gemini-2.5-flash-lite)
  * 
  * @param {Array<{role: string, content: string}>} messages - Lịch sử hội thoại
  * @param {string} customSystemInstruction - Tùy chọn ghi đè hoặc bổ sung system instruction
@@ -411,6 +412,7 @@ async function streamChatResponse(messages, customSystemInstruction = '') {
 
 module.exports = {
   PRIMARY_MODEL,
+  SECONDARY_MODEL,
   FALLBACK_MODEL,
   CANDIDATE_MODELS,
   VERTEX_MODELS: CANDIDATE_MODELS,

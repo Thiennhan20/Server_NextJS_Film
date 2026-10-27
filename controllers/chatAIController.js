@@ -1,12 +1,12 @@
 const axios = require('axios');
 const vertexAiService = require('../services/vertexAiService');
 
-// Model ưu tiên: gemini-2.5-flash (Vertex AI ổn định), tự động fallback sang gemini-3.7-flash khi cần
-const CANDIDATE_MODELS = vertexAiService.CANDIDATE_MODELS || ['gemini-2.5-flash', 'gemini-3.7-flash'];
+// Model nhóm 1 (Vertex AI ổn định 100%): Ưu tiên gemini-2.5-flash, fallback sang gemini-2.5-pro và gemini-2.5-flash-lite
+const CANDIDATE_MODELS = vertexAiService.CANDIDATE_MODELS || ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.5-flash-lite'];
 
 const generateResponse = async (req, res) => {
     try {
-        let { messages, system, message, prompt } = req.body;
+        let { messages, system, message, prompt, currentMovie } = req.body;
 
         // Chuẩn hóa input nếu client gửi string đơn lẻ
         if (!messages && (message || prompt)) {
@@ -17,9 +17,20 @@ const generateResponse = async (req, res) => {
             return res.status(400).json({ error: 'Nội dung tin nhắn không hợp lệ (messages array required).' });
         }
 
+        // Cắt tỉa ngữ cảnh: Giữ 8 tin nhắn gần nhất để phản hồi nhanh và tiết kiệm token
+        if (messages.length > 8) {
+            messages = messages.slice(-8);
+        }
+
+        // Bổ sung ngữ cảnh phim người dùng đang xem nếu có
+        if (currentMovie && typeof currentMovie === 'string' && currentMovie.trim()) {
+            const movieContext = `[Ngữ cảnh trang hiện tại: Người dùng đang ở trang phim "${currentMovie.trim()}". Nếu người dùng hỏi các câu hỏi ngắn hoặc dùng từ "phim này", "ai đóng", "review", hãy ưu tiên hiểu là đang nói về phim này.]`;
+            system = system ? `${system}\n\n${movieContext}` : movieContext;
+        }
+
         let replyText = null;
 
-        // 1. Ưu tiên xử lý qua vertexAiService (đã tích hợp ưu tiên 3.7 và fallback 2.5)
+        // 1. Ưu tiên xử lý qua vertexAiService (các model nhóm 1)
         if (vertexAiService.isConfigured()) {
             try {
                 replyText = await vertexAiService.generateChatResponse(messages, system);
@@ -106,11 +117,11 @@ const generateResponse = async (req, res) => {
 
 /**
  * Streaming endpoint — SSE (Server-Sent Events)
- * Trả về từng chunk text realtime sử dụng DUY NHẤT gemini-3.7-flash
+ * Trả về từng chunk text realtime sử dụng các model nhóm 1 (gemini-2.5-flash, gemini-2.5-pro, gemini-2.5-flash-lite)
  */
 const generateStreamResponse = async (req, res) => {
     try {
-        let { messages, system, message, prompt } = req.body;
+        let { messages, system, message, prompt, currentMovie } = req.body;
 
         if (!messages && (message || prompt)) {
             messages = [{ role: 'user', content: message || prompt }];
@@ -118,6 +129,17 @@ const generateStreamResponse = async (req, res) => {
 
         if (!messages || !Array.isArray(messages) || messages.length === 0) {
             return res.status(400).json({ error: 'Nội dung tin nhắn không hợp lệ.' });
+        }
+
+        // Cắt tỉa ngữ cảnh: Giữ 8 tin nhắn gần nhất
+        if (messages.length > 8) {
+            messages = messages.slice(-8);
+        }
+
+        // Bổ sung ngữ cảnh phim người dùng đang xem nếu có
+        if (currentMovie && typeof currentMovie === 'string' && currentMovie.trim()) {
+            const movieContext = `[Ngữ cảnh trang hiện tại: Người dùng đang ở trang phim "${currentMovie.trim()}". Nếu người dùng hỏi các câu hỏi ngắn hoặc dùng từ "phim này", "ai đóng", "review", hãy ưu tiên hiểu là đang nói về phim này.]`;
+            system = system ? `${system}\n\n${movieContext}` : movieContext;
         }
 
         if (!vertexAiService.isConfigured() && !process.env.GEMINI_API_KEY) {
