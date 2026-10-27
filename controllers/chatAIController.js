@@ -94,7 +94,7 @@ const generateResponse = async (req, res) => {
         }
 
         return res.status(503).json({
-            error: 'Mô hình gemini-3.7-flash đang quá tải tạm thời. Bạn vui lòng thử lại sau giây lát!'
+            error: 'Mô hình AI đang quá tải tạm thời. Bạn vui lòng thử lại sau giây lát!'
         });
 
     } catch (error) {
@@ -121,7 +121,7 @@ const generateStreamResponse = async (req, res) => {
         }
 
         if (!vertexAiService.isConfigured() && !process.env.GEMINI_API_KEY) {
-            return res.status(500).json({ error: 'Chưa cấu hình credentials cho mô hình gemini-3.7-flash.' });
+            return res.status(500).json({ error: 'Chưa cấu hình credentials cho mô hình AI.' });
         }
 
         // Set SSE headers
@@ -178,13 +178,14 @@ const generateStreamResponse = async (req, res) => {
         // Gửi signal kết thúc stream
         res.write(`data: [DONE]\n\n`);
         res.end();
-        console.log(`✅ [ChatAI] Stream hoàn tất với model: ${TARGET_MODEL}`);
+        const activeModel = vertexAiService.PRIMARY_MODEL || 'gemini-2.5-flash';
+        console.log(`✅ [ChatAI] Stream hoàn tất với model: ${activeModel}`);
 
     } catch (error) {
         console.error('❌ [ChatAI] Stream error:', error.message);
         if (!res.headersSent) {
-            res.status(500).json({ error: 'Lỗi stream AI gemini-3.7-flash.' });
-        } else {
+            res.status(500).json({ error: 'Lỗi stream AI.' });
+        } else if (!res.writableEnded) {
             res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
             res.end();
         }
