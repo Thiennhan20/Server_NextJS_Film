@@ -2,9 +2,9 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-// Cấu hình model theo độ ưu tiên: Ưu tiên gemini-3.7-flash, tự động dự phòng sang gemini-2.5-flash khi Google giới hạn quota/quá tải
-const PRIMARY_MODEL = 'gemini-3.7-flash';
-const FALLBACK_MODEL = 'gemini-2.5-flash';
+// Cấu hình model: Ưu tiên gemini-2.5-flash (chạy trực tiếp trên Vertex AI qua Service Account, không giới hạn 20 req/day)
+const PRIMARY_MODEL = 'gemini-2.5-flash';
+const FALLBACK_MODEL = 'gemini-3.7-flash';
 const CANDIDATE_MODELS = [PRIMARY_MODEL, FALLBACK_MODEL];
 
 const DEFAULT_LOCATION = process.env.VERTEX_LOCATION || 'us-central1';

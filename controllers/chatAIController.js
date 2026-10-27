@@ -1,8 +1,8 @@
 const axios = require('axios');
 const vertexAiService = require('../services/vertexAiService');
 
-// Model ưu tiên: gemini-3.7-flash, tự động fallback sang gemini-2.5-flash khi quá tải hoặc hạn chế quota
-const CANDIDATE_MODELS = vertexAiService.CANDIDATE_MODELS || ['gemini-3.7-flash', 'gemini-2.5-flash'];
+// Model ưu tiên: gemini-2.5-flash (Vertex AI ổn định), tự động fallback sang gemini-3.7-flash khi cần
+const CANDIDATE_MODELS = vertexAiService.CANDIDATE_MODELS || ['gemini-2.5-flash', 'gemini-3.7-flash'];
 
 const generateResponse = async (req, res) => {
     try {
