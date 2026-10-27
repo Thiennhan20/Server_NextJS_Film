@@ -1,13 +1,9 @@
 const axios = require('axios');
 const vertexAiService = require('../services/vertexAiService');
 
-// Fallback danh sách model nếu dùng GEMINI_API_KEY trực tiếp
-const GEMINI_MODELS = [
-    'gemini-2.5-flash',
-    'gemini-2.5-pro',
-    'gemini-2.0-flash',
-    'gemini-1.5-flash'
-];
+// Model duy nhất theo yêu cầu: gemini-3.7-flash (không tự chuyển sang model khác)
+const TARGET_MODEL = 'gemini-3.7-flash';
+const GEMINI_MODELS = [TARGET_MODEL];
 
 const generateResponse = async (req, res) => {
     try {
@@ -24,45 +20,52 @@ const generateResponse = async (req, res) => {
 
         let replyText = null;
 
-        // 1. ƯU TIÊN 1: Sử dụng Google Cloud Vertex AI (Service Account Key đã nạp trên Render hoặc local)
+        // 1. Ưu tiên xử lý qua vertexAiService (đã tích hợp chuẩn duy nhất gemini-3.7-flash)
         if (vertexAiService.isConfigured()) {
             try {
                 replyText = await vertexAiService.generateChatResponse(messages, system);
             } catch (err) {
-                console.warn('⚠️ [ChatAI] Vertex AI gặp sự cố:', err.message);
+                console.warn('⚠️ [ChatAI] vertexAiService gặp sự cố:', err.message);
             }
         }
 
-        // 2. ƯU TIÊN 2: Fallback qua GEMINI_API_KEY (nếu có cấu hình)
+        // 2. Dự phòng trực tiếp qua GEMINI_API_KEY (DUY NHẤT model gemini-3.7-flash)
         if (!replyText && process.env.GEMINI_API_KEY) {
             const formattedContents = messages.map(msg => ({
                 role: msg.role === 'assistant' || msg.role === 'model' ? 'model' : 'user',
                 parts: [{ text: msg.content }]
             }));
 
-            for (const modelName of GEMINI_MODELS) {
-                try {
-                    const response = await axios.post(
-                        `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${process.env.GEMINI_API_KEY}`,
-                        {
-                            systemInstruction: { parts: [{ text: system || vertexAiService.MOVIE_AI_SYSTEM_INSTRUCTION }] },
-                            contents: formattedContents,
-                        },
-                        {
-                            headers: { 'Content-Type': 'application/json' },
-                            timeout: 15000
+            try {
+                const response = await axios.post(
+                    `https://generativelanguage.googleapis.com/v1beta/models/${TARGET_MODEL}:generateContent?key=${process.env.GEMINI_API_KEY}`,
+                    {
+                        systemInstruction: { parts: [{ text: system || vertexAiService.MOVIE_AI_SYSTEM_INSTRUCTION }] },
+                        contents: formattedContents,
+                        generationConfig: {
+                            temperature: 0.7,
+                            maxOutputTokens: 4096,
+                            topP: 0.95
                         }
-                    );
-
-                    const text = response.data.candidates?.[0]?.content?.parts?.[0]?.text;
-                    if (text) {
-                        replyText = text;
-                        console.log(`✅ [ChatAI] Fallback thành công qua GEMINI_API_KEY với model: ${modelName}`);
-                        break;
+                    },
+                    {
+                        headers: { 'Content-Type': 'application/json' },
+                        timeout: 25000
                     }
-                } catch (err) {
-                    console.warn(`⚠️ [ChatAI] Bỏ qua ${modelName}: HTTP ${err.response?.status || err.message}`);
+                );
+
+                const parts = response.data.candidates?.[0]?.content?.parts || [];
+                const text = parts
+                    .filter(p => p.text && !p.thought)
+                    .map(p => p.text)
+                    .join('');
+
+                if (text) {
+                    replyText = text;
+                    console.log(`✅ [ChatAI] Phản hồi thành công từ model: ${TARGET_MODEL}`);
                 }
+            } catch (err) {
+                console.warn(`⚠️ [ChatAI] Gọi ${TARGET_MODEL} qua API Key thất bại: ${err.response?.status || err.message}`);
             }
         }
 
@@ -84,12 +87,12 @@ const generateResponse = async (req, res) => {
         // Nếu không có nguồn nào trả lời được
         if (!vertexAiService.isConfigured() && !process.env.GEMINI_API_KEY) {
             return res.status(500).json({
-                error: 'Hệ thống AI chưa được nạp Google Cloud credentials hoặc GEMINI_API_KEY trên Server.'
+                error: 'Hệ thống AI chưa được cấu hình Google Cloud credentials hoặc GEMINI_API_KEY trên Server.'
             });
         }
 
         return res.status(503).json({
-            error: 'Nguồn AI đang quá tải hoặc tạm thời bảo trì. Bạn vui lòng thử lại sau giây lát!'
+            error: 'Mô hình gemini-3.7-flash đang quá tải tạm thời. Bạn vui lòng thử lại sau giây lát!'
         });
 
     } catch (error) {
@@ -101,7 +104,7 @@ const generateResponse = async (req, res) => {
 
 /**
  * Streaming endpoint — SSE (Server-Sent Events)
- * Trả về từng chunk text realtime để frontend hiển thị giống ChatGPT
+ * Trả về từng chunk text realtime sử dụng DUY NHẤT gemini-3.7-flash
  */
 const generateStreamResponse = async (req, res) => {
     try {
@@ -115,8 +118,8 @@ const generateStreamResponse = async (req, res) => {
             return res.status(400).json({ error: 'Nội dung tin nhắn không hợp lệ.' });
         }
 
-        if (!vertexAiService.isConfigured()) {
-            return res.status(500).json({ error: 'Chưa cấu hình Vertex AI credentials.' });
+        if (!vertexAiService.isConfigured() && !process.env.GEMINI_API_KEY) {
+            return res.status(500).json({ error: 'Chưa cấu hình credentials cho mô hình gemini-3.7-flash.' });
         }
 
         // Set SSE headers
@@ -130,7 +133,7 @@ const generateStreamResponse = async (req, res) => {
 
         const vertexStream = await vertexAiService.streamChatResponse(messages, system);
 
-        // Đọc SSE stream từ Vertex AI, parse JSON, lọc thinking, gửi text chunks
+        // Đọc SSE stream từ Vertex AI / Generative Language API, parse JSON, lọc thinking, gửi text chunks
         const reader = vertexStream.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
@@ -157,7 +160,7 @@ const generateStreamResponse = async (req, res) => {
                     const parts = parsed.candidates?.[0]?.content?.parts || [];
 
                     for (const part of parts) {
-                        // Bỏ qua thinking parts của gemini-3.8-flash
+                        // Bỏ qua thinking parts
                         if (part.thought) continue;
                         if (part.text) {
                             // Gửi chunk text tới frontend qua SSE
@@ -173,12 +176,12 @@ const generateStreamResponse = async (req, res) => {
         // Gửi signal kết thúc stream
         res.write(`data: [DONE]\n\n`);
         res.end();
-        console.log('✅ [ChatAI] Stream hoàn tất.');
+        console.log(`✅ [ChatAI] Stream hoàn tất với model: ${TARGET_MODEL}`);
 
     } catch (error) {
         console.error('❌ [ChatAI] Stream error:', error.message);
         if (!res.headersSent) {
-            res.status(500).json({ error: 'Lỗi stream AI.' });
+            res.status(500).json({ error: 'Lỗi stream AI gemini-3.7-flash.' });
         } else {
             res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
             res.end();
