@@ -1,9 +1,8 @@
 const axios = require('axios');
 const vertexAiService = require('../services/vertexAiService');
 
-// Model duy nhất theo yêu cầu: gemini-3.7-flash (không tự chuyển sang model khác)
-const TARGET_MODEL = 'gemini-3.7-flash';
-const GEMINI_MODELS = [TARGET_MODEL];
+// Model ưu tiên: gemini-3.7-flash, tự động fallback sang gemini-2.5-flash khi quá tải hoặc hạn chế quota
+const CANDIDATE_MODELS = vertexAiService.CANDIDATE_MODELS || ['gemini-3.7-flash', 'gemini-2.5-flash'];
 
 const generateResponse = async (req, res) => {
     try {
@@ -20,7 +19,7 @@ const generateResponse = async (req, res) => {
 
         let replyText = null;
 
-        // 1. Ưu tiên xử lý qua vertexAiService (đã tích hợp chuẩn duy nhất gemini-3.7-flash)
+        // 1. Ưu tiên xử lý qua vertexAiService (đã tích hợp ưu tiên 3.7 và fallback 2.5)
         if (vertexAiService.isConfigured()) {
             try {
                 replyText = await vertexAiService.generateChatResponse(messages, system);
@@ -29,43 +28,46 @@ const generateResponse = async (req, res) => {
             }
         }
 
-        // 2. Dự phòng trực tiếp qua GEMINI_API_KEY (DUY NHẤT model gemini-3.7-flash)
+        // 2. Dự phòng trực tiếp qua GEMINI_API_KEY nếu vertexAiService chưa có kết quả
         if (!replyText && process.env.GEMINI_API_KEY) {
             const formattedContents = messages.map(msg => ({
                 role: msg.role === 'assistant' || msg.role === 'model' ? 'model' : 'user',
                 parts: [{ text: msg.content }]
             }));
 
-            try {
-                const response = await axios.post(
-                    `https://generativelanguage.googleapis.com/v1beta/models/${TARGET_MODEL}:generateContent?key=${process.env.GEMINI_API_KEY}`,
-                    {
-                        systemInstruction: { parts: [{ text: system || vertexAiService.MOVIE_AI_SYSTEM_INSTRUCTION }] },
-                        contents: formattedContents,
-                        generationConfig: {
-                            temperature: 0.7,
-                            maxOutputTokens: 4096,
-                            topP: 0.95
+            for (const modelName of CANDIDATE_MODELS) {
+                try {
+                    const response = await axios.post(
+                        `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${process.env.GEMINI_API_KEY}`,
+                        {
+                            systemInstruction: { parts: [{ text: system || vertexAiService.MOVIE_AI_SYSTEM_INSTRUCTION }] },
+                            contents: formattedContents,
+                            generationConfig: {
+                                temperature: 0.7,
+                                maxOutputTokens: 4096,
+                                topP: 0.95
+                            }
+                        },
+                        {
+                            headers: { 'Content-Type': 'application/json' },
+                            timeout: 20000
                         }
-                    },
-                    {
-                        headers: { 'Content-Type': 'application/json' },
-                        timeout: 25000
+                    );
+
+                    const parts = response.data.candidates?.[0]?.content?.parts || [];
+                    const text = parts
+                        .filter(p => p.text && !p.thought)
+                        .map(p => p.text)
+                        .join('');
+
+                    if (text) {
+                        replyText = text;
+                        console.log(`✅ [ChatAI] Phản hồi thành công từ model: ${modelName}`);
+                        break;
                     }
-                );
-
-                const parts = response.data.candidates?.[0]?.content?.parts || [];
-                const text = parts
-                    .filter(p => p.text && !p.thought)
-                    .map(p => p.text)
-                    .join('');
-
-                if (text) {
-                    replyText = text;
-                    console.log(`✅ [ChatAI] Phản hồi thành công từ model: ${TARGET_MODEL}`);
+                } catch (err) {
+                    console.warn(`⚠️ [ChatAI] Gọi ${modelName} qua API Key thất bại: ${err.response?.status || err.message}`);
                 }
-            } catch (err) {
-                console.warn(`⚠️ [ChatAI] Gọi ${TARGET_MODEL} qua API Key thất bại: ${err.response?.status || err.message}`);
             }
         }
 

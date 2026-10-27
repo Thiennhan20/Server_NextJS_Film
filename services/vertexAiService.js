@@ -2,9 +2,10 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-// Cấu hình DUY NHẤT model gemini-3.7-flash (không tự chuyển sang model khác)
-const TARGET_MODEL = 'gemini-3.7-flash';
-const VERTEX_MODELS = [TARGET_MODEL];
+// Cấu hình model theo độ ưu tiên: Ưu tiên gemini-3.7-flash, tự động dự phòng sang gemini-2.5-flash khi Google giới hạn quota/quá tải
+const PRIMARY_MODEL = 'gemini-3.7-flash';
+const FALLBACK_MODEL = 'gemini-2.5-flash';
+const CANDIDATE_MODELS = [PRIMARY_MODEL, FALLBACK_MODEL];
 
 const DEFAULT_LOCATION = process.env.VERTEX_LOCATION || 'us-central1';
 
@@ -183,16 +184,16 @@ function isConfigured() {
 }
 
 /**
- * Gọi Google Generative Language API với DUY NHẤT model gemini-3.7-flash
+ * Gọi Google Generative Language API với model được chỉ định
  */
-async function callGenerativeLanguageApi(formattedContents, systemPromptText, stream = false) {
+async function callGenerativeLanguageApi(modelName, formattedContents, systemPromptText, stream = false) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     throw new Error('GEMINI_API_KEY không được tìm thấy trên Server');
   }
 
   const action = stream ? 'streamGenerateContent?alt=sse&' : 'generateContent?';
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${TARGET_MODEL}:${action}key=${apiKey}`;
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:${action}key=${apiKey}`;
 
   const payload = {
     systemInstruction: { parts: [{ text: systemPromptText }] },
@@ -204,62 +205,43 @@ async function callGenerativeLanguageApi(formattedContents, systemPromptText, st
     }
   };
 
-  let lastErr = null;
-  // Thử tối đa 2 lần với chính gemini-3.7-flash (phòng trường hợp 503 tạm thời)
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    try {
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
 
-      if (!response.ok) {
-        const errText = await response.text();
-        if (response.status === 503 && attempt < 2) {
-          console.warn(`⚠️ [Gemini 3.7 Flash] Gặp 503 tạm thời, đang thử lại lần ${attempt + 1}...`);
-          await new Promise(r => setTimeout(r, 1500));
-          continue;
-        }
-        throw new Error(`GenerativeLanguage API status ${response.status}: ${errText}`);
-      }
-
-      if (stream) {
-        return response.body;
-      }
-
-      const data = await response.json();
-      const parts = data.candidates?.[0]?.content?.parts || [];
-      const text = parts
-        .filter(p => p.text && !p.thought)
-        .map(p => p.text)
-        .join('');
-
-      if (!text) {
-        throw new Error('Mô hình gemini-3.7-flash không trả về nội dung văn bản');
-      }
-
-      return text;
-    } catch (err) {
-      lastErr = err;
-      if (attempt < 2) {
-        await new Promise(r => setTimeout(r, 1500));
-      }
-    }
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`GenerativeLanguage API (${modelName}) status ${response.status}: ${errText}`);
   }
 
-  throw lastErr;
+  if (stream) {
+    return response.body;
+  }
+
+  const data = await response.json();
+  const parts = data.candidates?.[0]?.content?.parts || [];
+  const text = parts
+    .filter(p => p.text && !p.thought)
+    .map(p => p.text)
+    .join('');
+
+  if (!text) {
+    throw new Error(`Mô hình ${modelName} không trả về nội dung văn bản`);
+  }
+
+  return text;
 }
 
 /**
- * Gửi yêu cầu trò chuyện tới DUY NHẤT model gemini-3.7-flash
+ * Gửi yêu cầu trò chuyện AI (Ưu tiên gemini-3.7-flash, tự động fallback an toàn)
  * 
  * @param {Array<{role: string, content: string}>} messages - Lịch sử hội thoại
  * @param {string} customSystemInstruction - Tùy chọn ghi đè hoặc bổ sung system instruction
  * @returns {Promise<string>}
  */
 async function generateChatResponse(messages, customSystemInstruction = '') {
-  // Chuẩn hóa định dạng tin nhắn sang chuẩn Gemini: role user/model và parts
   const formattedContents = messages
     .filter(m => m && m.content && m.content.trim())
     .map(msg => ({
@@ -275,77 +257,84 @@ async function generateChatResponse(messages, customSystemInstruction = '') {
     ? `${MOVIE_AI_SYSTEM_INSTRUCTION}\n\nThông tin bổ sung:\n${customSystemInstruction}`
     : MOVIE_AI_SYSTEM_INSTRUCTION;
 
-  // 1. Thử gọi qua Vertex AI với gemini-3.7-flash nếu có credentials
-  const creds = loadCredentials();
-  if (creds) {
-    try {
-      const token = await getAccessToken();
-      const projectId = creds.project_id;
-      const location = DEFAULT_LOCATION;
-      const endpoint = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/google/models/${TARGET_MODEL}:generateContent`;
+  let lastError = null;
 
-      const callVertex = async (useSearchTool = true) => {
-        const payload = {
-          systemInstruction: { parts: [{ text: systemPromptText }] },
-          contents: formattedContents,
-          generationConfig: {
-            temperature: 0.7,
-            maxOutputTokens: 4096,
-            topP: 0.95
+  for (const modelName of CANDIDATE_MODELS) {
+    // 1. Thử gọi qua Vertex AI nếu có credentials
+    const creds = loadCredentials();
+    if (creds) {
+      try {
+        const token = await getAccessToken();
+        const projectId = creds.project_id;
+        const location = DEFAULT_LOCATION;
+        const endpoint = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/google/models/${modelName}:generateContent`;
+
+        const callVertex = async (useSearchTool = true) => {
+          const payload = {
+            systemInstruction: { parts: [{ text: systemPromptText }] },
+            contents: formattedContents,
+            generationConfig: {
+              temperature: 0.7,
+              maxOutputTokens: 4096,
+              topP: 0.95
+            }
+          };
+
+          if (useSearchTool) {
+            payload.tools = [{ googleSearch: {} }];
           }
+
+          return await fetch(endpoint, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(payload)
+          });
         };
 
-        if (useSearchTool) {
-          payload.tools = [{ googleSearch: {} }];
+        let response = await callVertex(true);
+        if (!response.ok && response.status === 400) {
+          response = await callVertex(false);
         }
 
-        return await fetch(endpoint, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(payload)
-        });
-      };
+        if (response.ok) {
+          const data = await response.json();
+          const parts = data.candidates?.[0]?.content?.parts || [];
+          const text = parts
+            .filter(p => p.text && !p.thought)
+            .map(p => p.text)
+            .join('');
 
-      let response = await callVertex(true);
-      if (!response.ok && response.status === 400) {
-        response = await callVertex(false);
-      }
-
-      if (response.ok) {
-        const data = await response.json();
-        const parts = data.candidates?.[0]?.content?.parts || [];
-        const text = parts
-          .filter(p => p.text && !p.thought)
-          .map(p => p.text)
-          .join('');
-
-        if (text) {
-          console.log(`✅ [VertexAI] Phản hồi thành công từ model: ${TARGET_MODEL}`);
-          return text;
+          if (text) {
+            console.log(`✅ [VertexAI] Phản hồi thành công từ model: ${modelName}`);
+            return text;
+          }
         }
-      } else {
-        const errText = await response.text();
-        console.warn(`⚠️ [VertexAI] Gọi ${TARGET_MODEL} thất bại (HTTP ${response.status}): ${errText.slice(0, 150)}`);
+      } catch (vertexErr) {
+        lastError = vertexErr;
       }
-    } catch (vertexErr) {
-      console.warn(`⚠️ [VertexAI] Lỗi khi gọi Vertex AI với ${TARGET_MODEL}:`, vertexErr.message);
+    }
+
+    // 2. Thử gọi qua Google Generative Language API
+    if (process.env.GEMINI_API_KEY) {
+      try {
+        const text = await callGenerativeLanguageApi(modelName, formattedContents, systemPromptText, false);
+        console.log(`✅ [GeminiAPI] Phản hồi thành công từ model: ${modelName}`);
+        return text;
+      } catch (apiErr) {
+        lastError = apiErr;
+        console.warn(`⚠️ [GeminiAPI] Model ${modelName} gặp sự cố: ${apiErr.message}. Đang thử tiếp...`);
+      }
     }
   }
 
-  // 2. Gọi qua Google Generative Language API với DUY NHẤT model gemini-3.7-flash
-  if (process.env.GEMINI_API_KEY) {
-    console.log(`🔄 [GeminiAPI] Đang xử lý qua Generative Language API với model: ${TARGET_MODEL}`);
-    return await callGenerativeLanguageApi(formattedContents, systemPromptText, false);
-  }
-
-  throw new Error('Chưa cấu hình Google Cloud credentials hoặc GEMINI_API_KEY cho mô hình gemini-3.7-flash');
+  throw new Error(lastError ? lastError.message : 'Tất cả nguồn AI đều không phản hồi');
 }
 
 /**
- * Stream phản hồi từ DUY NHẤT model gemini-3.7-flash — trả về ReadableStream (SSE)
+ * Stream phản hồi từ Gemini Models — trả về ReadableStream (SSE)
  */
 async function streamChatResponse(messages, customSystemInstruction = '') {
   const formattedContents = messages
@@ -361,59 +350,68 @@ async function streamChatResponse(messages, customSystemInstruction = '') {
     ? `${MOVIE_AI_SYSTEM_INSTRUCTION}\n\nThông tin bổ sung:\n${customSystemInstruction}`
     : MOVIE_AI_SYSTEM_INSTRUCTION;
 
-  // 1. Thử stream qua Vertex AI với gemini-3.7-flash
-  const creds = loadCredentials();
-  if (creds) {
-    try {
-      const token = await getAccessToken();
-      const projectId = creds.project_id;
-      const location = DEFAULT_LOCATION;
-      const endpoint = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/google/models/${TARGET_MODEL}:streamGenerateContent?alt=sse`;
+  let lastError = null;
 
-      const payload = {
-        systemInstruction: { parts: [{ text: systemPromptText }] },
-        contents: formattedContents,
-        generationConfig: {
-          temperature: 0.7,
-          maxOutputTokens: 4096,
-          topP: 0.95
-        },
-        tools: [{ googleSearch: {} }]
-      };
+  for (const modelName of CANDIDATE_MODELS) {
+    // 1. Thử stream qua Vertex AI
+    const creds = loadCredentials();
+    if (creds) {
+      try {
+        const token = await getAccessToken();
+        const projectId = creds.project_id;
+        const location = DEFAULT_LOCATION;
+        const endpoint = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/google/models/${modelName}:streamGenerateContent?alt=sse`;
 
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(payload)
-      });
+        const payload = {
+          systemInstruction: { parts: [{ text: systemPromptText }] },
+          contents: formattedContents,
+          generationConfig: {
+            temperature: 0.7,
+            maxOutputTokens: 4096,
+            topP: 0.95
+          },
+          tools: [{ googleSearch: {} }]
+        };
 
-      if (response.ok && response.body) {
-        console.log(`🔄 [VertexAI] Bắt đầu stream từ model: ${TARGET_MODEL}`);
-        return response.body;
-      } else {
-        const errText = await response.text();
-        console.warn(`⚠️ [VertexAI] Stream ${TARGET_MODEL} thất bại (HTTP ${response.status}): ${errText.slice(0, 150)}`);
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(payload)
+        });
+
+        if (response.ok && response.body) {
+          console.log(`🔄 [VertexAI] Bắt đầu stream từ model: ${modelName}`);
+          return response.body;
+        }
+      } catch (vertexErr) {
+        lastError = vertexErr;
       }
-    } catch (vertexErr) {
-      console.warn(`⚠️ [VertexAI] Lỗi stream Vertex AI với ${TARGET_MODEL}:`, vertexErr.message);
+    }
+
+    // 2. Thử stream qua Google Generative Language API
+    if (process.env.GEMINI_API_KEY) {
+      try {
+        const stream = await callGenerativeLanguageApi(modelName, formattedContents, systemPromptText, true);
+        console.log(`🔄 [GeminiAPI] Bắt đầu stream từ model: ${modelName}`);
+        return stream;
+      } catch (apiErr) {
+        lastError = apiErr;
+        console.warn(`⚠️ [GeminiAPI] Stream model ${modelName} gặp sự cố: ${apiErr.message}. Đang thử tiếp...`);
+      }
     }
   }
 
-  // 2. Stream qua Google Generative Language API với DUY NHẤT model gemini-3.7-flash
-  if (process.env.GEMINI_API_KEY) {
-    console.log(`🔄 [GeminiAPI] Bắt đầu stream từ Generative Language API với model: ${TARGET_MODEL}`);
-    return await callGenerativeLanguageApi(formattedContents, systemPromptText, true);
-  }
-
-  throw new Error('Chưa cấu hình Google Cloud credentials hoặc GEMINI_API_KEY cho mô hình gemini-3.7-flash');
+  throw new Error(lastError ? lastError.message : 'Tất cả nguồn stream AI đều không phản hồi');
 }
 
 module.exports = {
-  TARGET_MODEL,
-  VERTEX_MODELS,
+  PRIMARY_MODEL,
+  FALLBACK_MODEL,
+  CANDIDATE_MODELS,
+  VERTEX_MODELS: CANDIDATE_MODELS,
   isConfigured,
   generateChatResponse,
   streamChatResponse,
