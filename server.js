@@ -35,8 +35,15 @@ app.use(helmet({
 }));
 app.disable('x-powered-by');
 
-// Enable response compression
-app.use(compression());
+// Enable response compression (bỏ qua SSE text/event-stream để truyền dữ liệu tức thì không bị đệm)
+app.use(compression({
+  filter: (req, res) => {
+    if (req.headers.accept && req.headers.accept.includes('text/event-stream')) {
+      return false;
+    }
+    return compression.filter(req, res);
+  }
+}));
 app.use(cookieParser());
 
 // CORS configuration

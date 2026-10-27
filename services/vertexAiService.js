@@ -238,6 +238,25 @@ async function callGenerativeLanguageApi(modelName, formattedContents, systemPro
 }
 
 /**
+ * Nhận diện thông minh khi nào cần tra cứu Google Search thời gian thực (để không bị delay 2-3s cho các câu hỏi thường)
+ */
+function shouldSearchGoogle(messages) {
+  const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
+  if (!lastUserMsg || !lastUserMsg.content) return false;
+  const content = lastUserMsg.content.toLowerCase();
+
+  const searchKeywords = [
+    '2025', '2026', '2027',
+    'mới nhất', 'mới ra', 'sắp ra', 'sắp chiếu', 'chiếu rạp',
+    'lịch chiếu', 'khi nào', 'trailer', 'tin tức', 'doanh thu',
+    'hôm nay', 'tuần này', 'tháng này', 'năm nay',
+    'phần mới', 'phần tiếp theo', 'bao giờ', 'ngày phát hành', 'công chiếu'
+  ];
+
+  return searchKeywords.some(kw => content.includes(kw));
+}
+
+/**
  * Gửi yêu cầu trò chuyện AI (Ưu tiên gemini-2.5-flash, tự động fallback sang gemini-2.5-pro và gemini-2.5-flash-lite)
  * 
  * @param {Array<{role: string, content: string}>} messages - Lịch sử hội thoại
@@ -260,6 +279,7 @@ async function generateChatResponse(messages, customSystemInstruction = '') {
     ? `${MOVIE_AI_SYSTEM_INSTRUCTION}\n\nThông tin bổ sung:\n${customSystemInstruction}`
     : MOVIE_AI_SYSTEM_INSTRUCTION;
 
+  const needSearch = shouldSearchGoogle(messages);
   let lastError = null;
 
   for (const modelName of CANDIDATE_MODELS) {
@@ -297,8 +317,8 @@ async function generateChatResponse(messages, customSystemInstruction = '') {
           });
         };
 
-        let response = await callVertex(true);
-        if (!response.ok && response.status === 400) {
+        let response = await callVertex(needSearch);
+        if (!response.ok && response.status === 400 && needSearch) {
           response = await callVertex(false);
         }
 
@@ -353,6 +373,7 @@ async function streamChatResponse(messages, customSystemInstruction = '') {
     ? `${MOVIE_AI_SYSTEM_INSTRUCTION}\n\nThông tin bổ sung:\n${customSystemInstruction}`
     : MOVIE_AI_SYSTEM_INSTRUCTION;
 
+  const needSearch = shouldSearchGoogle(messages);
   let lastError = null;
 
   for (const modelName of CANDIDATE_MODELS) {
@@ -365,28 +386,38 @@ async function streamChatResponse(messages, customSystemInstruction = '') {
         const location = DEFAULT_LOCATION;
         const endpoint = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/google/models/${modelName}:streamGenerateContent?alt=sse`;
 
-        const payload = {
-          systemInstruction: { parts: [{ text: systemPromptText }] },
-          contents: formattedContents,
-          generationConfig: {
-            temperature: 0.7,
-            maxOutputTokens: 4096,
-            topP: 0.95
-          },
-          tools: [{ googleSearch: {} }]
+        const callVertexStream = async (useSearchTool = true) => {
+          const payload = {
+            systemInstruction: { parts: [{ text: systemPromptText }] },
+            contents: formattedContents,
+            generationConfig: {
+              temperature: 0.7,
+              maxOutputTokens: 4096,
+              topP: 0.95
+            }
+          };
+
+          if (useSearchTool) {
+            payload.tools = [{ googleSearch: {} }];
+          }
+
+          return await fetch(endpoint, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(payload)
+          });
         };
 
-        const response = await fetch(endpoint, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(payload)
-        });
+        let response = await callVertexStream(needSearch);
+        if (!response.ok && response.status === 400 && needSearch) {
+          response = await callVertexStream(false);
+        }
 
         if (response.ok && response.body) {
-          console.log(`🔄 [VertexAI] Bắt đầu stream từ model: ${modelName}`);
+          console.log(`🔄 [VertexAI] Bắt đầu stream từ model: ${modelName} (Search: ${needSearch ? 'bật' : 'tắt'})`);
           return response.body;
         }
       } catch (vertexErr) {

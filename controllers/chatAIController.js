@@ -146,10 +146,10 @@ const generateStreamResponse = async (req, res) => {
             return res.status(500).json({ error: 'Chưa cấu hình credentials cho mô hình AI.' });
         }
 
-        // Set SSE headers
+        // Set SSE headers (thêm no-transform để ngăn các proxy/middleware đệm buffer)
         res.writeHead(200, {
             'Content-Type': 'text/event-stream',
-            'Cache-Control': 'no-cache',
+            'Cache-Control': 'no-cache, no-transform',
             'Connection': 'keep-alive',
             'X-Accel-Buffering': 'no',
             'Access-Control-Allow-Origin': '*'
@@ -187,8 +187,11 @@ const generateStreamResponse = async (req, res) => {
                         // Bỏ qua thinking parts
                         if (part.thought) continue;
                         if (part.text) {
-                            // Gửi chunk text tới frontend qua SSE
+                            // Gửi chunk text tới frontend qua SSE và flush tức thì
                             res.write(`data: ${JSON.stringify({ text: part.text })}\n\n`);
+                            if (typeof res.flush === 'function') {
+                                res.flush();
+                            }
                         }
                     }
                 } catch {
@@ -199,6 +202,9 @@ const generateStreamResponse = async (req, res) => {
 
         // Gửi signal kết thúc stream
         res.write(`data: [DONE]\n\n`);
+        if (typeof res.flush === 'function') {
+            res.flush();
+        }
         res.end();
         const activeModel = vertexAiService.PRIMARY_MODEL || 'gemini-2.5-flash';
         console.log(`✅ [ChatAI] Stream hoàn tất với model: ${activeModel}`);
