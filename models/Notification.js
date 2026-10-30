@@ -14,7 +14,7 @@ const notificationSchema = new mongoose.Schema({
   },
   type: {
     type: String,
-    enum: ['comment_liked', 'comment_replied', 'version_updated', 'friend_request', 'friend_accept'],
+    enum: ['comment_liked', 'comment_replied', 'version_updated', 'friend_request', 'friend_accept', 'room_invite'],
     required: true,
     index: true
   },
@@ -33,6 +33,10 @@ const notificationSchema = new mongoose.Schema({
       type: String,
       enum: ['movie', 'tvshow']
     },
+    roomId: String,
+    roomTitle: String,
+    roomPin: String,
+    poster: String,
     commentId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Comment'
@@ -46,7 +50,12 @@ const notificationSchema = new mongoose.Schema({
       maxlength: 160
     },
     versionHash: String,
-    versionMessage: String
+    versionMessage: String,
+    expiresAt: Date
+  },
+  expiresAt: {
+    type: Date,
+    default: null
   }
 }, {
   timestamps: true
@@ -54,6 +63,8 @@ const notificationSchema = new mongoose.Schema({
 
 notificationSchema.index({ recipient: 1, read: 1, createdAt: -1 });
 notificationSchema.index({ recipient: 1, createdAt: -1 });
+notificationSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+notificationSchema.index({ type: 1, 'metadata.roomId': 1 });
 
 const Notification = mongoose.model('Notification', notificationSchema);
 

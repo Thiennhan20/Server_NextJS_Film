@@ -345,6 +345,17 @@ async function deleteRoom(roomId) {
   await redis.del(`room:${roomId}`);
   await redis.del(`room:${roomId}:users`);
   await redis.del(`room:${roomId}:grace`);
+
+  // Clean up any pending room_invite notifications for this room
+  try {
+    const Notification = require('../models/Notification');
+    await Notification.deleteMany({
+      type: 'room_invite',
+      'metadata.roomId': String(roomId).toUpperCase()
+    });
+  } catch (err) {
+    console.error('Failed to cleanup room invite notifications on deleteRoom:', err);
+  }
 }
 
 /**

@@ -2,6 +2,7 @@ const Notification = require('../models/Notification');
 const Comment = require('../models/Comment');
 const User = require('../models/User');
 const axios = require('axios');
+const redis = require('../config/redis');
 
 const COMMENT_NOTIFICATION_TYPES = ['comment_liked', 'comment_replied'];
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
@@ -24,6 +25,8 @@ function getPushTitle(type, actorName) {
       return 'Lời mời kết bạn 👋';
     case 'friend_accept':
       return 'Đồng ý kết bạn ✅';
+    case 'room_invite':
+      return 'Lời mời xem chung 🎬';
     default:
       return 'Thông báo mới';
   }
@@ -39,6 +42,8 @@ function getPushBody(type, actorName, metadata) {
       return `${actorName} đã gửi lời mời kết bạn.`;
     case 'friend_accept':
       return `${actorName} đã đồng ý lời mời kết bạn.`;
+    case 'room_invite':
+      return `${actorName} đã mời bạn tham gia phòng xem chung: ${metadata?.roomTitle || 'Phòng xem phim'}`;
     default:
       return 'Bạn có một thông báo mới.';
   }
@@ -67,6 +72,8 @@ async function sendPushNotification(recipientId, serializedNotification) {
         data: {
           notificationId: serializedNotification?._id ? String(serializedNotification._id) : '',
           type,
+          roomId: metadata?.roomId || '',
+          roomPin: metadata?.roomPin || '',
         },
       }));
 
@@ -112,18 +119,50 @@ async function serializeNotification(notificationId) {
     .lean();
 }
 
-async function createNotification({ recipientId, actorId = null, type, metadata = {} }) {
+async function createNotification({ recipientId, actorId = null, type, metadata = {}, expiresAt = null }) {
   const recipient = normalizeId(recipientId);
   const actor = normalizeId(actorId);
 
   if (!recipient) return null;
   if (actor && actor === recipient) return null;
 
+  const targetExpiresAt = expiresAt || metadata.expiresAt || null;
+
+  // Deduplication for room_invite: if invite to same room already exists for this user, refresh it instead of duplicate
+  if (type === 'room_invite' && metadata.roomId) {
+    const existingInvite = await Notification.findOne({
+      recipient: recipientId,
+      actor: actorId || null,
+      type: 'room_invite',
+      'metadata.roomId': metadata.roomId
+    });
+
+    if (existingInvite) {
+      existingInvite.read = false;
+      existingInvite.readAt = null;
+      existingInvite.metadata = { ...existingInvite.metadata, ...metadata };
+      if (targetExpiresAt) {
+        existingInvite.expiresAt = targetExpiresAt;
+        existingInvite.metadata.expiresAt = targetExpiresAt;
+      }
+      existingInvite.createdAt = new Date();
+      await existingInvite.save();
+
+      const serialized = await serializeNotification(existingInvite._id);
+      sendPushNotification(recipientId, serialized).catch(() => {});
+      return serialized;
+    }
+  }
+
   const notification = await Notification.create({
     recipient: recipientId,
     actor: actorId || null,
     type,
-    metadata
+    metadata: {
+      ...metadata,
+      ...(targetExpiresAt ? { expiresAt: targetExpiresAt } : {})
+    },
+    expiresAt: targetExpiresAt
   });
 
   const serialized = await serializeNotification(notification._id);
@@ -223,6 +262,66 @@ async function cleanupStaleCommentNotifications(recipientId) {
   if (staleNotificationIds.length === 0) return { deletedCount: 0 };
 
   return Notification.deleteMany({ _id: { $in: staleNotificationIds } });
+}
+
+async function cleanupStaleRoomInviteNotifications(recipientId) {
+  const recipient = normalizeId(recipientId);
+  if (!recipient) return { deletedCount: 0 };
+
+  const invites = await Notification.find({
+    recipient: recipientId,
+    type: 'room_invite'
+  })
+    .select('_id metadata.roomId expiresAt createdAt')
+    .lean();
+
+  if (invites.length === 0) return { deletedCount: 0 };
+
+  const now = Date.now();
+  const roomIds = Array.from(new Set(invites.map((inv) => inv.metadata?.roomId).filter(Boolean)));
+
+  // Check each roomId in Redis
+  const roomExistsMap = new Map();
+  await Promise.all(
+    roomIds.map(async (roomId) => {
+      try {
+        const exists = await redis.exists(`room:${roomId}`);
+        roomExistsMap.set(roomId, Boolean(exists));
+      } catch (err) {
+        console.error(`Error checking room:${roomId} in Redis:`, err);
+        // On Redis error, assume exists so we don't accidentally delete valid invites
+        roomExistsMap.set(roomId, true);
+      }
+    })
+  );
+
+  const staleNotificationIds = invites
+    .filter((inv) => {
+      const roomId = inv.metadata?.roomId;
+      // If roomId is missing, it's malformed
+      if (!roomId) return true;
+
+      // If room no longer exists in Redis, it has expired or was closed
+      if (roomExistsMap.get(roomId) === false) return true;
+
+      // If expiresAt exists and is in the past
+      if (inv.expiresAt && new Date(inv.expiresAt).getTime() <= now) return true;
+
+      return false;
+    })
+    .map((inv) => inv._id);
+
+  if (staleNotificationIds.length === 0) return { deletedCount: 0 };
+
+  return Notification.deleteMany({ _id: { $in: staleNotificationIds } });
+}
+
+async function deleteRoomInviteNotifications(roomId) {
+  if (!roomId) return { deletedCount: 0 };
+  return Notification.deleteMany({
+    type: 'room_invite',
+    'metadata.roomId': String(roomId).toUpperCase()
+  });
 }
 
 async function findNotificationCommentFallback(notification) {
@@ -425,5 +524,7 @@ module.exports = {
   deleteLikeNotification,
   updateNotificationsForCommentPreview,
   cleanupStaleCommentNotifications,
+  cleanupStaleRoomInviteNotifications,
+  deleteRoomInviteNotifications,
   resolveNotificationTarget
 };

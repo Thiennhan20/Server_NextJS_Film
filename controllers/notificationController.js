@@ -9,7 +9,10 @@ const getNotifications = async (req, res) => {
     const limit = Math.min(Math.max(parseInt(req.query.limit || '20', 10), 1), 50);
     const skip = (page - 1) * limit;
 
-    await notificationService.cleanupStaleCommentNotifications(userId);
+    await Promise.all([
+      notificationService.cleanupStaleCommentNotifications(userId),
+      notificationService.cleanupStaleRoomInviteNotifications(userId)
+    ]);
 
     const query = { recipient: userId };
 
@@ -40,7 +43,10 @@ const getNotifications = async (req, res) => {
 
 const getUnreadCount = async (req, res) => {
   try {
-    await notificationService.cleanupStaleCommentNotifications(req.user);
+    await Promise.all([
+      notificationService.cleanupStaleCommentNotifications(req.user),
+      notificationService.cleanupStaleRoomInviteNotifications(req.user)
+    ]);
 
     const unreadCount = await Notification.countDocuments({
       recipient: req.user,

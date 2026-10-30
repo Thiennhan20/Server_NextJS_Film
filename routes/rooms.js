@@ -13,6 +13,8 @@ const auth = require('../middleware/auth');
 const roomService = require('../services/roomService');
 const streamHistoryService = require('../services/streamHistoryService');
 const redisClient = require('../config/redis');
+const notificationService = require('../services/notificationService');
+const User = require('../models/User');
 
 const COMMUNITY_PICKS_CACHE_KEY = 'cache:community_picks';
 const COMMUNITY_PICKS_TTL = 8 * 3600; // 8 hours (28,800 seconds)
@@ -586,4 +588,83 @@ router.patch('/:id/episode-playlist', auth, async (req, res) => {
   }
 });
 
+// ─── POST /api/rooms/:id/invite — Mời bạn bè vào phòng xem chung ──
+router.post('/:id/invite', auth, async (req, res) => {
+  try {
+    const roomId = req.params.id.toUpperCase();
+    const currentUserId = req.user;
+    const { friendId } = req.body;
+
+    if (!friendId) {
+      return res.status(400).json({ error: 'friendId is required.' });
+    }
+
+    if (String(friendId) === String(currentUserId)) {
+      return res.status(400).json({ error: 'Cannot invite yourself.' });
+    }
+
+    const room = await roomService.getRoom(roomId);
+    if (!room) {
+      return res.status(404).json({ error: 'Room not found or has expired.' });
+    }
+
+    // Verify room is not already full
+    const maxUsers = parseInt(room.max_users) || 2;
+    const currentMembers = await roomService.getRoomMembers(roomId);
+    if (currentMembers.length >= maxUsers) {
+      return res.status(400).json({
+        error: `Phòng đã đủ số người tối đa (${currentMembers.length}/${maxUsers}), không thể mời thêm.`
+      });
+    }
+
+    // Verify recipient user exists
+    const recipient = await User.findById(friendId).select('_id name username').lean();
+    if (!recipient) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+
+    // Create notification with room expiresAt
+    const roomExpiresAt = room.expires_at ? new Date(room.expires_at) : new Date(Date.now() + 6 * 3600 * 1000);
+    const notification = await notificationService.createNotification({
+      recipientId: friendId,
+      actorId: currentUserId,
+      type: 'room_invite',
+      expiresAt: roomExpiresAt,
+      metadata: {
+        roomId: room.room_id,
+        roomTitle: room.title || 'Phòng xem phim',
+        roomPin: room.has_password && room.pin ? room.pin : undefined,
+        poster: room.poster || '',
+        contentType: room.content_type || 'movie',
+        movieId: room.movie_id ? Number(room.movie_id) || undefined : undefined,
+        expiresAt: roomExpiresAt
+      }
+    });
+
+    // Broadcast real-time notification to socket if available
+    const io = req.app.get('io');
+    if (io) {
+      const watchPartyNamespace = io.of ? io.of('/watch-party') : io;
+      watchPartyNamespace.emit(`notification:${friendId}`, {
+        type: 'room_invite',
+        notification
+      });
+      io.emit(`notification:${friendId}`, {
+        type: 'room_invite',
+        notification
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Invitation sent successfully.',
+      notificationId: notification?._id
+    });
+  } catch (error) {
+    console.error('Invite friend to room error:', error);
+    res.status(500).json({ error: 'Failed to send invite.' });
+  }
+});
+
 module.exports = router;
+
