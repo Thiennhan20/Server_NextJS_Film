@@ -64,7 +64,7 @@ app.use((req, res, next) => {
 
 // MongoDB connection
 mongoose.connect(process.env.MONGODB_URI, {
-  serverSelectionTimeoutMS: 5000,
+  serverSelectionTimeoutMS: 10000,
   socketTimeoutMS: 45000,
 })
   .then(async () => {
@@ -77,8 +77,8 @@ mongoose.connect(process.env.MONGODB_URI, {
     }
   })
   .catch(err => {
-    console.error('❌ MongoDB connection error:', err);
-    process.exit(1);
+    console.error('❌ MongoDB initial connection error:', err.message || err);
+    console.warn('⚠️ Server will stay running while Mongoose attempts to reconnect in the background.');
   });
 
 // MongoDB event handlers
@@ -241,6 +241,17 @@ app.get('/ip-info', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// Global error handling middleware to prevent unhandled rejections from crashing the server
+app.use((err, req, res, next) => {
+  console.error('Unhandled server error:', err.message || err);
+  if (res.headersSent) {
+    return next(err);
+  }
+  res.status(err.status || 500).json({
+    message: err.message || 'Internal Server Error'
+  });
 });
 
 const PORT = process.env.PORT || 3001;

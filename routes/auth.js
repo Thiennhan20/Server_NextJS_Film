@@ -8,20 +8,20 @@ const adminApiKey = require('../middleware/adminApiKey');
 const authController = require('../controllers/authController');
 
 // Register route
-router.post('/register', [
+router.post('/register', authController.rateLimitMiddleware, [
   body('name').notEmpty().withMessage('Please enter your name').isLength({ max: 20 }).withMessage('Username must not exceed 20 characters'),
   body('email').isEmail().withMessage('Please enter a valid email'),
   body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
 ], authController.register);
 
 // Login route
-router.post('/login', [
+router.post('/login', authController.rateLimitMiddleware, [
   body('email').isEmail().withMessage('Please enter a valid email'),
   body('password').exists().withMessage('Password is required'),
 ], authController.login);
 
 // Google login / link route (server verifies Google ID token or access token)
-router.post('/google-login', [
+router.post('/google-login', authController.rateLimitMiddleware, [
   body().custom((value, { req }) => {
     if (!req.body.credential && !req.body.accessToken) {
       throw new Error('Google credential or access token is required');
