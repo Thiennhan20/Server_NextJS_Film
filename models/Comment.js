@@ -99,7 +99,7 @@ commentSchema.methods.hasUserLiked = function(userId) {
   return this.likedBy.some(id => id.equals(userObjectId));
 };
 
-// Static method to get comments with user info
+// Static method to get comments with user info (batched to eliminate N+1 queries)
 commentSchema.statics.getCommentsWithUserInfo = async function(movieId, type, userId = null) {
   const comments = await this.find({ 
     movieId, 
@@ -111,35 +111,39 @@ commentSchema.statics.getCommentsWithUserInfo = async function(movieId, type, us
   .sort({ createdAt: -1 })
   .lean();
 
-  // Get replies for each comment
-  const commentsWithReplies = await Promise.all(
-    comments.map(async (comment) => {
-      const replies = await this.find({ 
-        parentId: comment._id, 
-        isDeleted: false 
-      })
-      .populate('userId', 'name avatar')
-      .populate('replyTo', 'name avatar')
-      .sort({ createdAt: 1 })
-      .lean();
+  if (!comments.length) return [];
 
-      // Add user like status if userId provided
-      const processedReplies = replies.map(reply => ({
-        ...reply,
-        isLiked: userId ? reply.likedBy.some(id => id.equals(userId)) : false,
-        likedBy: undefined // Don't send likedBy array to client
-      }));
+  // Single batched query for all replies across all top-level comments
+  const parentIds = comments.map(c => c._id);
+  const allReplies = await this.find({ 
+    parentId: { $in: parentIds }, 
+    isDeleted: false 
+  })
+  .populate('userId', 'name avatar')
+  .populate('replyTo', 'name avatar')
+  .sort({ createdAt: 1 })
+  .lean();
 
-      return {
-        ...comment,
-        isLiked: userId ? comment.likedBy.some(id => id.equals(userId)) : false,
-        likedBy: undefined, // Don't send likedBy array to client
-        replies: processedReplies
-      };
-    })
-  );
+  // Group replies by parentId in memory
+  const repliesByParent = new Map();
+  for (const reply of allReplies) {
+    const parentKey = String(reply.parentId);
+    const processedReply = {
+      ...reply,
+      isLiked: userId ? reply.likedBy?.some(id => id.equals(userId)) : false,
+      likedBy: undefined
+    };
+    const list = repliesByParent.get(parentKey) || [];
+    list.push(processedReply);
+    repliesByParent.set(parentKey, list);
+  }
 
-  return commentsWithReplies;
+  return comments.map(comment => ({
+    ...comment,
+    isLiked: userId ? comment.likedBy?.some(id => id.equals(userId)) : false,
+    likedBy: undefined,
+    replies: repliesByParent.get(String(comment._id)) || []
+  }));
 };
 
 const Comment = mongoose.model('Comment', commentSchema);

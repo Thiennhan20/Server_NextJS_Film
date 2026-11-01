@@ -94,9 +94,9 @@ const userSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Compound index to ensure unique email per auth type
-// Note: This index might cause issues with existing users, so we handle uniqueness in application logic
-// userSchema.index({ email: 1, authType: 1 }, { unique: true });
+// Indexes for fast lookup on login, registration, and password reset
+userSchema.index({ email: 1 });
+userSchema.index({ email: 1, authType: 1 });
 
 // Hash password before saving (only for email auth type)
 userSchema.pre('save', async function (next) {

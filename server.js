@@ -275,4 +275,47 @@ server.listen(PORT, () => {
     .catch(err => {
       console.log('🌐 Could not fetch public IP:', err.message);
     });
-}); 
+});
+
+// Graceful Shutdown Handler
+let isShuttingDown = false;
+const gracefulShutdown = async (signal) => {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  console.log(`\n🛑 Received ${signal}. Starting graceful shutdown...`);
+
+  server.close(async (err) => {
+    if (err) {
+      console.error('Error closing HTTP server:', err);
+    } else {
+      console.log('✅ HTTP server closed.');
+    }
+
+    try {
+      if (io) {
+        io.close();
+        console.log('✅ WebSocket server closed.');
+      }
+
+      if (mongoose.connection.readyState !== 0) {
+        await mongoose.connection.close(false);
+        console.log('✅ MongoDB connection closed.');
+      }
+
+      console.log('👋 Graceful shutdown complete.');
+      process.exit(0);
+    } catch (cleanupErr) {
+      console.error('Error during cleanup:', cleanupErr);
+      process.exit(1);
+    }
+  });
+
+  // Force exit if hanging beyond 10 seconds
+  setTimeout(() => {
+    console.error('⚠️ Shutdown timed out (10s). Forcing exit.');
+    process.exit(1);
+  }, 10000).unref();
+};
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT')); 

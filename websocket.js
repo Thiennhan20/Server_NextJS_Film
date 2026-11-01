@@ -23,6 +23,26 @@ const onlineUsers = new Map(); // socketId → username
 // roomId → Map<userId, { socketId, username, heartbeatTimer, graceTimer }>
 const roomConnections = new Map();
 
+// ─── Chat Content Filtering & Sanitization ─────────────────────
+const BAD_WORDS_REGEX = /\b(đụ|địt|lồn|cặc|buồi|đm|dcm|đcm|vcl|vl|clmm|vđ|chó đẻ|óc chó|fuck|fucking|bitch|asshole|bastard|cunt|dick|pussy)\b/gi;
+
+function filterProfanity(text) {
+  if (typeof text !== 'string') return '';
+  return text.replace(BAD_WORDS_REGEX, '***');
+}
+
+function sanitizeChatMessage(text, maxLength = 500) {
+  if (typeof text !== 'string') return '';
+  const trimmed = text.trim().slice(0, maxLength);
+  const escaped = trimmed
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+  return filterProfanity(escaped);
+}
+
 function initializeWebSocket(server) {
   const io = new Server(server, {
     cors: {
@@ -51,26 +71,51 @@ function initializeWebSocket(server) {
 
     socket.on('chat_message', (message) => {
       const username = onlineUsers.get(socket.id);
-      if (username) {
-        io.emit('chat_message', {
-          type: 'user',
-          username: username,
-          content: message,
-          timestamp: new Date().toISOString()
-        });
+      if (!username) return;
+
+      // Rate limit: 1 message per 1.5 seconds per socket
+      const now = Date.now();
+      if (socket.lastGlobalMsgTime && now - socket.lastGlobalMsgTime < 1500) {
+        socket.emit('chat_error', { message: 'Bạn đang gửi tin nhắn quá nhanh. Vui lòng chậm lại 1-2 giây!' });
+        return;
       }
+      socket.lastGlobalMsgTime = now;
+
+      const cleanContent = sanitizeChatMessage(message, 500);
+      if (!cleanContent) return;
+
+      io.emit('chat_message', {
+        type: 'user',
+        username: username,
+        content: cleanContent,
+        timestamp: new Date().toISOString()
+      });
     });
 
     socket.on('image_message', (imageData) => {
       const username = onlineUsers.get(socket.id);
-      if (username) {
-        io.emit('chat_message', {
-          type: 'image',
-          username: username,
-          content: imageData,
-          timestamp: new Date().toISOString()
-        });
+      if (!username) return;
+
+      // Rate limit: 1 image per 3 seconds per socket
+      const now = Date.now();
+      if (socket.lastGlobalImgTime && now - socket.lastGlobalImgTime < 3000) {
+        socket.emit('chat_error', { message: 'Vui lòng chờ ít giây trước khi gửi thêm ảnh!' });
+        return;
       }
+      socket.lastGlobalImgTime = now;
+
+      // Validate base64 image data (max ~500KB)
+      if (typeof imageData !== 'string' || !imageData.startsWith('data:image/') || imageData.length > 700000) {
+        socket.emit('chat_error', { message: 'Ảnh không hợp lệ hoặc dung lượng vượt quá 500KB!' });
+        return;
+      }
+
+      io.emit('chat_message', {
+        type: 'image',
+        username: username,
+        content: imageData,
+        timestamp: new Date().toISOString()
+      });
     });
 
     socket.on('disconnect', () => {
@@ -482,10 +527,13 @@ function initializeWebSocket(server) {
         }
       }
 
+      const cleanMessage = sanitizeChatMessage(message, 500);
+      if (!cleanMessage) return;
+
       wpNamespace.to(`room:${currentRoomId}`).emit('CHAT', {
         user_id: socket.userId,
         username: socket.username,
-        message: message.trim().substring(0, 500), // Max 500 chars
+        message: cleanMessage,
         sent_at: new Date().toISOString(),
       });
     });
