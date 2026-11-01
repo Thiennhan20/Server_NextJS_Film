@@ -200,8 +200,8 @@ app.get('/', (req, res) => {
   `);
 });
 
-// Lấy trạng thái của server
-app.get('/health', async (req, res) => {
+// Lấy trạng thái của server (hỗ trợ cả /health cho UptimeRobot và /api/health cho Next.js/Axios)
+const healthCheckHandler = async (req, res) => {
   const start = Date.now();
   try {
     // Thực hiện truy vấn đơn giản tới database
@@ -220,7 +220,10 @@ app.get('/health', async (req, res) => {
       dbLatency: dbLatency + 'ms'
     });
   }
-});
+};
+
+app.get('/health', healthCheckHandler);
+app.get('/api/health', healthCheckHandler);
 
 
 // Kiểm tra địa chỉ IP và vị trí mạng của server
