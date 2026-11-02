@@ -1,6 +1,6 @@
 const Hashids = require('hashids/cjs');
 
-const salt = process.env.HASHID_SALT || process.env.JWT_SECRET || 'movie-web-hashid-salt-secret';
+const salt = process.env.HASHID_SALT || 'movie-web-hashid-salt-secret';
 const hashids = new Hashids(salt, 10);
 
 /**

@@ -3,6 +3,7 @@ const Comment = require('../models/Comment');
 const User = require('../models/User');
 const notificationService = require('../services/notificationService');
 const redis = require('../config/redis');
+const { decodeId, encodeId } = require('../utils/hashids');
 
 // ─── Redis Cache Keys & TTLs for Homepage Comments ───────────────────────────
 const CACHE_KEY_TOP_COMMENTS = 'homepage:comments:top';
@@ -179,6 +180,7 @@ const getTopComments = async (req, res) => {
                     replyCount: 1,
                     createdAt: 1,
                     'user.name': 1,
+                    'user.username': 1,
                     'user.avatar': 1,
                     'user.isEmailVerified': 1
                 }
@@ -238,6 +240,7 @@ const getRecentComments = async (req, res) => {
                     content: 1,
                     createdAt: 1,
                     'user.name': 1,
+                    'user.username': 1,
                     'user.avatar': 1,
                     'user.isEmailVerified': 1
                 }
@@ -283,8 +286,8 @@ const getUserComments = async (req, res) => {
         const [total, comments] = await Promise.all([
             Comment.countDocuments(query),
             Comment.find(query)
-                .populate('userId', 'name avatar')
-                .populate('replyTo', 'name avatar')
+                .populate('userId', 'name username avatar')
+                .populate('replyTo', 'name username avatar')
                 .sort({ createdAt: -1 })
                 .skip(skip)
                 .limit(limit)
@@ -376,8 +379,8 @@ const getCommentsByMovie = async (req, res) => {
         // Batched fetch of replies for current page comments
         const replies = topIds.length
             ? await Comment.find({ parentId: { $in: topIds }, isDeleted: false })
-                .populate('userId', 'name avatar')
-                .populate('replyTo', 'name avatar')
+                .populate('userId', 'name username avatar')
+                .populate('replyTo', 'name username avatar')
                 .sort({ createdAt: 1 })
                 .lean()
             : [];
@@ -423,13 +426,14 @@ const getCommentThread = async (req, res) => {
     try {
         const { id } = req.params;
         const userId = req.user;
+        const commentId = decodeId(id) || id;
 
         const targetComment = await Comment.findOne({
-            _id: id,
+            _id: commentId,
             isDeleted: false
         })
-            .populate('userId', 'name avatar')
-            .populate('replyTo', 'name avatar')
+            .populate('userId', 'name username avatar')
+            .populate('replyTo', 'name username avatar')
             .lean();
 
         if (!targetComment || !targetComment.userId) {
@@ -443,8 +447,8 @@ const getCommentThread = async (req, res) => {
                 parentId: null,
                 isDeleted: false
             })
-                .populate('userId', 'name avatar')
-                .populate('replyTo', 'name avatar')
+                .populate('userId', 'name username avatar')
+                .populate('replyTo', 'name username avatar')
                 .lean()
             : targetComment;
 
@@ -456,8 +460,8 @@ const getCommentThread = async (req, res) => {
             parentId: parentComment._id,
             isDeleted: false
         })
-            .populate('userId', 'name avatar')
-            .populate('replyTo', 'name avatar')
+            .populate('userId', 'name username avatar')
+            .populate('replyTo', 'name username avatar')
             .sort({ createdAt: 1 })
             .lean();
 
@@ -472,7 +476,9 @@ const getCommentThread = async (req, res) => {
                 replies: processedReplies
             },
             targetCommentId: String(targetComment._id),
-            parentCommentId: String(parentComment._id)
+            parentCommentId: String(parentComment._id),
+            hashTargetCommentId: encodeId(targetComment._id),
+            hashParentCommentId: encodeId(parentComment._id)
         });
     } catch (error) {
         console.error('Get comment thread error:', error);
@@ -606,7 +612,7 @@ const toggleLike = async (req, res) => {
         }
 
         const updatedComment = await Comment.findById(id)
-            .populate('userId', 'name avatar')
+            .populate('userId', 'name username avatar')
             .lean();
 
         // Invalidate top comments cache (like count changed)
@@ -654,8 +660,8 @@ const updateComment = async (req, res) => {
         );
 
         const updated = await Comment.findById(id)
-            .populate('userId', 'name avatar')
-            .populate('replyTo', 'name avatar')
+            .populate('userId', 'name username avatar')
+            .populate('replyTo', 'name username avatar')
             .lean();
 
         res.json({
@@ -736,8 +742,8 @@ const getReplies = async (req, res) => {
             parentId: id,
             isDeleted: false
         })
-            .populate('userId', 'name avatar')
-            .populate('replyTo', 'name avatar')
+            .populate('userId', 'name username avatar')
+            .populate('replyTo', 'name username avatar')
             .sort({ createdAt: 1 })
             .lean();
 

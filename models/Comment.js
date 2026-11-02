@@ -107,7 +107,7 @@ commentSchema.statics.getCommentsWithUserInfo = async function(movieId, type, us
     parentId: null, 
     isDeleted: false 
   })
-  .populate('userId', 'name avatar')
+  .populate('userId', 'name username avatar')
   .sort({ createdAt: -1 })
   .lean();
 
@@ -119,8 +119,8 @@ commentSchema.statics.getCommentsWithUserInfo = async function(movieId, type, us
     parentId: { $in: parentIds }, 
     isDeleted: false 
   })
-  .populate('userId', 'name avatar')
-  .populate('replyTo', 'name avatar')
+  .populate('userId', 'name username avatar')
+  .populate('replyTo', 'name username avatar')
   .sort({ createdAt: 1 })
   .lean();
 
