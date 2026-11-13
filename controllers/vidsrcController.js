@@ -455,6 +455,11 @@ const embedProxy = async (req, res) => {
               return absUrl;
             }
 
+            // VidSrc streams have IP-bound tokens and support direct CORS. Never proxy them through backend.
+            if (absUrl.includes('generate.php') || absUrl.includes('/pl/') || absUrl.includes('/content/') || absUrl.includes('.m3u8') || absUrl.includes('.ts') || absUrl.includes('token=')) {
+              return absUrl;
+            }
+
             const baseOrigin = window.location.origin || localServerOrigin;
 
             // Intercept local relative M3U8 requests like http://localhost:3001/pl/...
