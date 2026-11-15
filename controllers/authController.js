@@ -317,9 +317,28 @@ function containsProfanity(text) {
     });
 }
 
+// Helper to read platform settings synced from Admin Panel in MongoDB
+const getPlatformSettings = async () => {
+    try {
+        const mongoose = require('mongoose');
+        if (mongoose.connection.readyState !== 1 || !mongoose.connection.db) return {};
+        const doc = await mongoose.connection.db.collection('systemsettings').findOne({ key: 'platform_settings' });
+        return (doc && doc.settings) || {};
+    } catch {
+        return {};
+    }
+};
+
 // Register
 const register = async (req, res) => {
     try {
+        const platformSettings = await getPlatformSettings();
+        if (platformSettings.maintenance_mode === true || platformSettings.maintenance_mode === 'true') {
+            return res.status(503).json({ message: 'System is currently under maintenance. Please try again later.', code: 'MAINTENANCE_MODE' });
+        }
+        if (platformSettings.registration_enabled === false || platformSettings.registration_enabled === 'false') {
+            return res.status(403).json({ message: 'New user registration is currently disabled by administrator.', code: 'REGISTRATION_DISABLED' });
+        }
         const errors = validationResult(req);
         if (!errors.isEmpty()) {
             return res.status(400).json({ errors: errors.array() });
@@ -425,6 +444,13 @@ const login = async (req, res) => {
             return res.status(400).json({ message: 'Invalid credentials' });
         }
 
+        if (user.isBanned) {
+            return res.status(403).json({
+                message: user.banReason ? `Account suspended: ${user.banReason}` : 'Your account has been suspended by an administrator.',
+                code: 'ACCOUNT_BANNED'
+            });
+        }
+
         // If legacy user, update to email auth type
         if (!user.authType) {
             user.authType = 'email';
@@ -511,6 +537,12 @@ const googleLogin = async (req, res) => {
 
         if (user) {
             // Google user exists - LOGIN
+            if (user.isBanned) {
+                return res.status(403).json({
+                    message: user.banReason ? `Account suspended: ${user.banReason}` : 'Your account has been suspended by an administrator.',
+                    code: 'ACCOUNT_BANNED'
+                });
+            }
 
             // Update user info if needed
             if (name && user.name !== name) {
@@ -664,6 +696,21 @@ const refreshToken = async (req, res) => {
                 path: '/'
             });
             return res.status(401).json({ message: 'Session expired' });
+        }
+
+        const sessionUser = await User.findById(session.userId).select('isBanned banReason').lean();
+        if (!sessionUser || sessionUser.isBanned) {
+            await Session.deleteOne({ _id: session._id });
+            res.clearCookie('refreshToken', {
+                httpOnly: true,
+                secure: process.env.NODE_ENV === 'production',
+                sameSite: 'lax',
+                path: '/'
+            });
+            return res.status(403).json({
+                message: sessionUser?.banReason ? `Account suspended: ${sessionUser.banReason}` : 'Account suspended or removed',
+                code: 'ACCOUNT_BANNED'
+            });
         }
 
         const token = authService.createToken(session.userId, session._id);

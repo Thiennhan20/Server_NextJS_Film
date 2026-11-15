@@ -27,7 +27,7 @@ const auth = async (req, res, next) => {
     const [isBlacklisted, sessionExists, user] = await Promise.all([
       BlacklistedToken.exists({ token }),
       decoded.sessionId ? Session.exists({ _id: decoded.sessionId }) : Promise.resolve(true),
-      User.findById(decoded.userId).select('passwordChangedAt').lean()
+      User.findById(decoded.userId).select('passwordChangedAt isBanned banReason').lean()
     ]);
 
     if (isBlacklisted) {
@@ -43,6 +43,13 @@ const auth = async (req, res, next) => {
 
     if (!user) {
       return res.status(401).json({ message: 'User not found' });
+    }
+
+    if (user.isBanned) {
+      return res.status(403).json({
+        message: user.banReason ? `Account suspended: ${user.banReason}` : 'Your account has been suspended by an administrator.',
+        code: 'ACCOUNT_BANNED'
+      });
     }
 
     // Invalidate tokens issued before password was changed

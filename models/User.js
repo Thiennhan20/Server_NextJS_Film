@@ -89,6 +89,23 @@ const userSchema = new mongoose.Schema({
   usernameChangedAt: {
     type: Date,
     default: null
+  },
+  isBanned: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
+  banReason: {
+    type: String,
+    default: ''
+  },
+  bannedAt: {
+    type: Date,
+    default: null
+  },
+  bannedBy: {
+    type: String,
+    default: ''
   }
 }, {
   timestamps: true
