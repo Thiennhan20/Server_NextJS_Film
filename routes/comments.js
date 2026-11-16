@@ -3,7 +3,10 @@ const router = express.Router();
 const { body } = require('express-validator');
 const auth = require('../middleware/auth');
 const optionalAuth = require('../middleware/optionalAuth');
+const adminApiKey = require('../middleware/adminApiKey');
+const reportRateLimiter = require('../middleware/reportRateLimiter');
 const commentController = require('../controllers/commentController');
+const { REPORT_REASONS } = require('../models/UserReport');
 
 // GET /api/comments/top - Lấy top comments (most liked or most replied) for homepage
 router.get('/top', optionalAuth, commentController.getTopComments);
@@ -13,6 +16,12 @@ router.get('/recent', optionalAuth, commentController.getRecentComments);
 
 // GET /api/comments/user/me - Lấy comments của mình
 router.get('/user/me', auth, commentController.getUserComments);
+
+// GET /api/comments/reported/me - Lấy danh sách commentId mà user đã báo cáo
+router.get('/reported/me', auth, commentController.getMyReportedCommentIds);
+
+// POST /api/comments/admin/invalidate-cache - Admin flush Redis homepage comment cache
+router.post('/admin/invalidate-cache', adminApiKey, commentController.invalidateCommentCachesEndpoint);
 
 // GET /api/comments/thread/:id - Get parent comment + replies for notification deep links
 router.get('/thread/:id', optionalAuth, commentController.getCommentThread);
@@ -28,6 +37,26 @@ router.post('/', [
   body('content').isLength({ min: 1, max: 500 }).withMessage('Content must be between 1 and 500 characters'),
   body('parentId').optional().isMongoId().withMessage('Parent ID must be a valid MongoDB ObjectId')
 ], commentController.validateRequest, commentController.createComment);
+
+// POST /api/comments/:id/report - Báo cáo bình luận vi phạm cho admin duyệt
+router.post(
+  '/:id/report',
+  [
+    auth,
+    body('reasonCategory')
+      .isIn(REPORT_REASONS)
+      .withMessage('Invalid report reason category'),
+    body('details')
+      .optional({ values: 'null' })
+      .isString()
+      .trim()
+      .isLength({ max: 300 })
+      .withMessage('Details cannot exceed 300 characters'),
+  ],
+  commentController.validateRequest,
+  reportRateLimiter,
+  commentController.reportComment
+);
 
 // PUT /api/comments/:id/like - Toggle like cho comment
 router.put('/:id/like', auth, commentController.toggleLike);

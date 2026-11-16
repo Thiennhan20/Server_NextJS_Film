@@ -1,6 +1,8 @@
+const mongoose = require('mongoose');
 const { validationResult } = require('express-validator');
 const Comment = require('../models/Comment');
 const User = require('../models/User');
+const UserReport = require('../models/UserReport');
 const notificationService = require('../services/notificationService');
 const redis = require('../config/redis');
 const { decodeId, encodeId } = require('../utils/hashids');
@@ -763,6 +765,168 @@ const getReplies = async (req, res) => {
     }
 };
 
+const isViRequest = (req) => (req.headers['accept-language'] || '').toLowerCase().includes('vi');
+
+const REPORT_REASON_LABELS = {
+    spam: 'Spam / Advertising',
+    harassment: 'Harassment / Personal Attack',
+    hate_speech: 'Hate Speech / Discrimination',
+    spoiler: 'Unmarked Spoilers',
+    inappropriate: 'Inappropriate Content',
+    other: 'Other'
+};
+
+// POST /api/comments/:id/report - Report a comment for manual admin review
+const reportComment = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const userId = req.user;
+        const isVi = isViRequest(req);
+
+        const commentId = decodeId(id) || id;
+        if (!mongoose.Types.ObjectId.isValid(commentId)) {
+            return res.status(400).json({
+                success: false,
+                message: isVi ? 'ID bình luận không hợp lệ.' : 'Invalid comment ID.'
+            });
+        }
+
+        const reasonCategory = String(req.body?.reasonCategory || '').trim();
+        const details = String(req.body?.details || '').trim();
+
+        if (!UserReport.REPORT_REASONS.includes(reasonCategory)) {
+            return res.status(400).json({
+                success: false,
+                message: isVi ? 'Lý do báo cáo không hợp lệ.' : 'Invalid report reason.'
+            });
+        }
+
+        if (reasonCategory === 'other' && details.length < 3) {
+            return res.status(400).json({
+                success: false,
+                message: isVi
+                    ? 'Vui lòng mô tả lý do cụ thể (ít nhất 3 ký tự).'
+                    : 'Please provide details for Other (at least 3 characters).'
+            });
+        }
+
+        const [comment, reporter] = await Promise.all([
+            Comment.findOne({ _id: commentId, isDeleted: false })
+                .populate('userId', 'name username')
+                .lean(),
+            User.findById(userId).select('name username').lean()
+        ]);
+
+        if (!comment) {
+            return res.status(404).json({
+                success: false,
+                message: isVi ? 'Không tìm thấy bình luận.' : 'Comment not found.'
+            });
+        }
+
+        const authorId = comment.userId?._id || comment.userId;
+        if (authorId && String(authorId) === String(userId)) {
+            return res.status(400).json({
+                success: false,
+                code: 'CANNOT_REPORT_OWN',
+                message: isVi
+                    ? 'Bạn không thể tự báo cáo bình luận của chính mình.'
+                    : 'You cannot report your own comment.'
+            });
+        }
+
+        const authorName = comment.userId?.name || comment.userId?.username || 'Unknown User';
+        const authorUsername = comment.userId?.username || '';
+        const reporterName = reporter?.name || reporter?.username || 'Unknown User';
+        const reasonLabel = REPORT_REASON_LABELS[reasonCategory] || reasonCategory;
+        const combinedReason = details ? `${reasonLabel}: ${details}` : reasonLabel;
+
+        const report = await UserReport.create({
+            reporterId: userId,
+            reporterName,
+            targetType: 'comment',
+            targetId: comment._id,
+            parentCommentId: comment.parentId || null,
+            reportedUserId: authorId || null,
+            reportedUserName: authorName,
+            movieId: comment.movieId,
+            contentType: comment.type,
+            targetDetail: comment.content || '',
+            commentSnapshot: {
+                content: (comment.content || '').slice(0, 500),
+                authorName,
+                authorUsername,
+                commentCreatedAt: comment.createdAt || null
+            },
+            reasonCategory,
+            details,
+            reason: combinedReason.slice(0, 400),
+            status: 'pending'
+        });
+
+        return res.status(201).json({
+            success: true,
+            message: isVi
+                ? 'Cảm ơn bạn đã báo cáo. Chúng tôi sẽ xem xét.'
+                : 'Thanks for your report. We will review it.',
+            data: {
+                reportId: String(report._id),
+                commentId: String(comment._id),
+                status: report.status
+            }
+        });
+    } catch (error) {
+        if (error && error.code === 11000) {
+            const isVi = isViRequest(req);
+            return res.status(409).json({
+                success: false,
+                code: 'ALREADY_REPORTED',
+                message: isVi
+                    ? 'Bạn đã báo cáo bình luận này rồi.'
+                    : 'You have already reported this comment.'
+            });
+        }
+        console.error('Report comment error:', error);
+        return res.status(500).json({ message: 'Server error' });
+    }
+};
+
+// GET /api/comments/reported/me - Get comment IDs already reported by the current user
+const getMyReportedCommentIds = async (req, res) => {
+    try {
+        const query = {
+            reporterId: req.user,
+            targetType: 'comment'
+        };
+        if (req.query.movieId !== undefined && !Number.isNaN(Number(req.query.movieId))) {
+            query.movieId = Number(req.query.movieId);
+        }
+        if (req.query.type && ['movie', 'tvshow'].includes(String(req.query.type))) {
+            query.contentType = String(req.query.type);
+        }
+
+        const reports = await UserReport.find(query).select('targetId').lean();
+        return res.json({
+            success: true,
+            data: reports.map(r => String(r.targetId))
+        });
+    } catch (error) {
+        console.error('Get my reported comment IDs error:', error);
+        return res.status(500).json({ message: 'Server error' });
+    }
+};
+
+// POST /api/comments/admin/invalidate-cache - Admin internal hook to flush homepage comment caches
+const invalidateCommentCachesEndpoint = async (_req, res) => {
+    try {
+        await invalidateCommentCaches('all');
+        return res.json({ success: true });
+    } catch (error) {
+        console.error('Invalidate comment caches endpoint error:', error);
+        return res.status(500).json({ success: false, message: 'Server error' });
+    }
+};
+
 module.exports = {
     validateRequest,
     getTopComments,
@@ -774,5 +938,8 @@ module.exports = {
     toggleLike,
     updateComment,
     deleteComment,
-    getReplies
+    getReplies,
+    reportComment,
+    getMyReportedCommentIds,
+    invalidateCommentCachesEndpoint
 };
